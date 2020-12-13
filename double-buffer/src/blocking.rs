@@ -27,7 +27,7 @@ pub struct Buffers<B, E: ?Sized = ()> {
     raw: raw::Buffers<B, Extra<E>>,
 }
 
-pub type ReaderGuard<'reader, B, T = B, E = ()> = raw::RawReaderGuard<'reader, T, TagGuard<B, E>>;
+pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::RawReaderGuard<'reader, T, TagGuard<B, E>>;
 
 struct Extra<E: ?Sized> {
     lock: Mutex<()>,
@@ -113,7 +113,7 @@ impl<B, E: ?Sized> Reader<B, E> {
         fn map_tag_guard<B, E: ?Sized>(raw: raw::TagGuard<B, Extra<E>>) -> TagGuard<B, E> { TagGuard { raw } }
 
         fn map_guard<B, E: ?Sized>(raw: raw::ReaderGuard<B, B, Extra<E>>) -> ReaderGuard<B, B, E> {
-            unsafe { raw::RawReaderGuard::map_tag_guard(raw, map_tag_guard) }
+            unsafe { crate::RawReaderGuard::map_tag_guard(raw, map_tag_guard) }
         }
 
         self.raw.try_get().map(map_guard)
