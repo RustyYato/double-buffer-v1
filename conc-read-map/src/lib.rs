@@ -12,9 +12,7 @@ pub trait RawMap: Sized {
 
     fn len(&self) -> usize;
 
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
+    fn is_empty(&self) -> bool { self.len() == 0 }
 
     fn clear(&mut self);
 
@@ -40,11 +38,11 @@ pub trait RawMapAccess<Q: ?Sized>: RawMap {
 }
 
 pub struct Write<'env, M, K, V> {
-    map: db::OpWrite<M, MapOps<'env, M, K, V>>,
+    map: db::op::Writer<M, MapOps<'env, M, K, V>>,
 }
 
 pub struct Read<M> {
-    map: db::Read<M>,
+    map: db::blocking::Reader<M>,
 }
 
 pub enum MapOps<'env, M, K, V> {
@@ -64,14 +62,14 @@ impl<M> Clone for Read<M> {
 }
 
 pub type WriteMap<'env, M> = Write<'env, M, <M as RawMap>::Key, <M as RawMap>::Value>;
-pub fn new<'env, M: RawMap>() -> (WriteMap<'env, M>, Read<M>) {
+pub fn new<'env, M: RawMap>() -> (Read<M>, WriteMap<'env, M>) {
     let (a, b) = M::new();
-    let (w, r) = db::new_op_writer_with(a, b);
+    let (r, w) = db::op::new_op_writer_with(a, b);
 
-    (Write { map: w }, Read { map: r })
+    (Read { map: r }, Write { map: w })
 }
 
-impl<M: RawMap> db::Operation<M> for MapOps<'_, M, M::Key, M::Value>
+impl<M: RawMap> db::op::Operation<M> for MapOps<'_, M, M::Key, M::Value>
 where
     M::Key: Clone,
     M::Value: Clone,
@@ -128,11 +126,9 @@ impl Order {
 
 impl<'env, M: RawMap> WriteMap<'env, M>
 where
-    MapOps<'env, M, M::Key, M::Value>: db::Operation<M>,
+    MapOps<'env, M, M::Key, M::Value>: db::op::Operation<M>,
 {
-    pub fn flush(&mut self) {
-        self.map.flush()
-    }
+    pub fn flush(&mut self) { self.map.flush() }
 
     pub fn reserve(&mut self, additional: usize) -> &mut Self {
         self.map.apply(MapOps::Reserve(additional));
@@ -162,33 +158,26 @@ where
         F: 'env + Send + FnMut(&M::Key, &mut M::Value, Order) -> bool,
         M: RawMapRetain,
     {
-        self.map
-            .apply(MapOps::Call(Call(Box::new(move |map, order| {
-                map.retain(|key, value| f(key, value, order))
-            }))))
+        self.map.apply(MapOps::Call(Call(Box::new(move |map, order| {
+            map.retain(|key, value| f(key, value, order))
+        }))))
     }
 }
 
 impl<M> Read<M> {
-    pub fn get_map(&mut self) -> db::ReadGuard<'_, M> {
-        self.map.get()
-    }
+    pub fn get_map(&mut self) -> db::blocking::ReaderGuard<'_, M> { self.map.get() }
 
-    pub fn get<Q>(&mut self, key: &Q) -> Option<db::ReadGuard<'_, M, M::Value>>
+    pub fn get<Q>(&mut self, key: &Q) -> Option<db::blocking::ReaderGuard<'_, M, M::Value>>
     where
         Q: ?Sized,
         M: RawMapAccess<Q>,
     {
-        db::ReadGuard::try_map(self.get_map(), move |x| x.get(key)).ok()
+        db::blocking::ReaderGuard::try_map(self.get_map(), move |x, _| x.get(key)).ok()
     }
 }
 
 impl<M: RawMap> Read<M> {
-    pub fn len(&mut self) -> usize {
-        self.get_map().len()
-    }
+    pub fn len(&mut self) -> usize { self.get_map().len() }
 
-    pub fn is_empty(&mut self) -> bool {
-        self.get_map().is_empty()
-    }
+    pub fn is_empty(&mut self) -> bool { self.get_map().is_empty() }
 }

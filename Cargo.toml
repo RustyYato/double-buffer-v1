@@ -2,5 +2,5 @@
 
 members = [
     'double-buffer',
-    # 'conc-read-map',
+    'conc-read-map',
 ]
