@@ -58,6 +58,13 @@ pub struct Buffers<B, E: ?Sized = ()> {
     extra: E,
 }
 
+pub struct SwapPacket(SmallVec<[(Thin<AtomicTag>, u32); 8]>);
+
+pub struct Swap<B, E: ?Sized> {
+    write: Write<B, E>,
+    packet: SwapPacket,
+}
+
 unsafe impl<B: Send, E: Send> Send for Buffers<B, E> {}
 unsafe impl<B: Sync, E: Sync> Sync for Buffers<B, E> {}
 
@@ -125,15 +132,20 @@ impl<B, E: ?Sized> Buffers<B, E> {
     }
 }
 
-enum SwapInfo {
-    StartSwap,
-    ContinueSwap(SmallVec<[(Thin<AtomicTag>, u32); 8]>),
-}
+impl<B, E> Swap<B, E> {
+    pub fn reader(&self) -> Read<B, E> { self.write.reader() }
 
-pub struct Swap(SwapInfo);
+    pub fn read(&self) -> &B { self.write.read() }
 
-impl Swap {
-    pub const fn start() -> Self { Self(SwapInfo::StartSwap) }
+    pub fn extra(&self) -> &E { self.write.extra() }
+
+    pub fn continue_swap(mut self) -> Result<Write<B, E>, Self> {
+        if unsafe { self.write.continue_buffer_swap_unchecked(&mut self.packet) } {
+            Err(self)
+        } else {
+            Ok(self.write)
+        }
+    }
 }
 
 impl<B, E: ?Sized> Write<B, E> {
@@ -162,21 +174,9 @@ impl<B, E: ?Sized> Write<B, E> {
     #[inline]
     pub fn extra(&self) -> &E { &self.buffers.extra }
 
-    #[inline]
-    pub fn swap_buffers_with<F: FnMut(&E)>(&mut self, ref mut callback: F) {
-        fn swap_buffers_with<B, E: ?Sized>(write: &mut Write<B, E>, callback: &mut dyn FnMut(&E)) {
-            let mut swap = Swap::start();
-
-            loop {
-                swap = match unsafe { write.try_swap_buffers(swap) } {
-                    Some(swap) => swap,
-                    None => break,
-                };
-                callback(write.extra());
-            }
-        }
-
-        swap_buffers_with(self, callback)
+    pub fn start_buffer_swap(mut self) -> Swap<B, E> {
+        let packet = unsafe { self.start_buffer_swap_unchecked() };
+        Swap { write: self, packet }
     }
 
     #[inline]
@@ -188,30 +188,45 @@ impl<B, E: ?Sized> Write<B, E> {
         self.swap_buffers_with(|_| backoff.snooze());
     }
 
-    pub unsafe fn try_swap_buffers(&mut self, swap: Swap) -> Option<Swap> {
-        let mut tags = match swap.0 {
-            SwapInfo::ContinueSwap(tags) => tags,
-            SwapInfo::StartSwap => {
-                atomic::fence(Ordering::SeqCst);
+    #[inline]
+    pub fn swap_buffers_with<F: FnMut(&E)>(&mut self, ref mut callback: F) {
+        fn swap_buffers_with<B, E: ?Sized>(write: &mut Write<B, E>, callback: &mut dyn FnMut(&E)) {
+            let mut swap = unsafe { write.start_buffer_swap_unchecked() };
+            let swap = &mut swap;
 
-                self.ptr = self.buffers.ptr.swap(self.ptr, Ordering::Release);
-
-                self.buffers
-                    .tag_list
-                    .lock()
-                    .iter()
-                    // anything that is potentially accessing a buffer right now
-                    .filter_map(|(_, tag)| {
-                        let tag_value = tag.epoch.load(Ordering::Relaxed);
-                        if tag_value % 2 == 1 {
-                            Some((tag.clone(), tag_value))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
+            while unsafe { write.continue_buffer_swap_unchecked(swap) } {
+                callback(write.extra());
             }
-        };
+        }
+
+        swap_buffers_with(self, callback)
+    }
+
+    unsafe fn start_buffer_swap_unchecked(&mut self) -> SwapPacket {
+        atomic::fence(Ordering::SeqCst);
+
+        self.ptr = self.buffers.ptr.swap(self.ptr, Ordering::Release);
+
+        SwapPacket(
+            self.buffers
+                .tag_list
+                .lock()
+                .iter()
+                // anything that is potentially accessing a buffer right now
+                .filter_map(|(_, tag)| {
+                    let tag_value = tag.epoch.load(Ordering::Relaxed);
+                    if tag_value % 2 == 1 {
+                        Some((tag.clone(), tag_value))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    unsafe fn continue_buffer_swap_unchecked(&mut self, packet: &mut SwapPacket) -> bool {
+        let tags = &mut packet.0;
 
         tags.retain(|(tag, enter_epoch)| {
             let enter_epoch = *enter_epoch;
@@ -221,10 +236,9 @@ impl<B, E: ?Sized> Write<B, E> {
 
         if tags.is_empty() {
             atomic::fence(Ordering::SeqCst);
-
-            None
+            false
         } else {
-            Some(Swap(SwapInfo::ContinueSwap(tags)))
+            true
         }
     }
 

@@ -8,6 +8,7 @@ edition = "2018"
 
 [features]
 
+default = ['parking_lot']
 nightly = ['smallvec/union']
 
 [dependencies]

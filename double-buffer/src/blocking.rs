@@ -35,6 +35,10 @@ struct Extra<E: ?Sized> {
     extra: E,
 }
 
+pub struct Swap<B, E: ?Sized> {
+    raw: raw::Swap<B, Extra<E>>,
+}
+
 impl<B: Default, E: Default> Default for Buffers<B, E> {
     #[inline]
     fn default() -> Self { Buffers::new(Default::default(), Default::default()).extra(Default::default()) }
@@ -116,6 +120,30 @@ impl<B, E: ?Sized> Read<B, E> {
     }
 }
 
+#[cold]
+#[inline(never)]
+fn sleep(lock: &Mutex<()>, cv: &Condvar) { cv.wait(&mut lock.lock()); }
+
+impl<B, E> Swap<B, E> {
+    pub fn reader(&self) -> Read<B, E> { Read { raw: self.raw.reader() } }
+
+    pub fn read(&self) -> &B { self.raw.read() }
+
+    pub fn extra(&self) -> &E { &self.raw.extra().extra }
+
+    pub fn sleep(&mut self) {
+        let Extra { lock, cv, .. } = self.raw.extra();
+        sleep(lock, cv);
+    }
+
+    pub fn continue_swap(self) -> Result<Write<B, E>, Self> {
+        match self.raw.continue_swap() {
+            Ok(raw) => Ok(Write { raw }),
+            Err(raw) => Err(Self { raw }),
+        }
+    }
+}
+
 impl<B, E: ?Sized> Write<B, E> {
     #[inline]
     pub fn reader(&self) -> Read<B, E> { Read { raw: self.raw.reader() } }
@@ -132,12 +160,19 @@ impl<B, E: ?Sized> Write<B, E> {
     #[inline]
     pub fn extra(&self) -> &E { &self.raw.extra().extra }
 
+    pub fn start_buffer_swap(self) -> Swap<B, E> {
+        Swap {
+            raw: self.raw.start_buffer_swap(),
+        }
+    }
+
+    pub fn swap_buffers(&mut self) {
+        fn noop<E: ?Sized>(_: &E) {}
+        self.swap_buffers_with(noop);
+    }
+
     pub fn swap_buffers_with<F: FnMut(&E)>(&mut self, mut callback: F) {
         use crossbeam_utils::Backoff;
-
-        #[cold]
-        #[inline(never)]
-        fn sleep(lock: &Mutex<()>, cv: &Condvar) { cv.wait(&mut lock.lock()); }
 
         let backoff = Backoff::new();
 
@@ -151,11 +186,6 @@ impl<B, E: ?Sized> Write<B, E> {
                 backoff.spin();
             }
         })
-    }
-
-    pub fn swap_buffers(&mut self) {
-        fn noop<E: ?Sized>(_: &E) {}
-        self.swap_buffers_with(noop);
     }
 
     #[inline]
