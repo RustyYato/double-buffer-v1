@@ -8,18 +8,18 @@ use std::{
 use crate::raw;
 
 #[repr(transparent)]
-pub struct Write<B, E: ?Sized = ()> {
-    raw: raw::Write<B, Extra<E>>,
+pub struct Writer<B, E: ?Sized = ()> {
+    raw: raw::Writer<B, Extra<E>>,
 }
 
 #[repr(transparent)]
-pub struct Read<B, E: ?Sized = ()> {
-    raw: raw::Read<B, Extra<E>>,
+pub struct Reader<B, E: ?Sized = ()> {
+    raw: raw::Reader<B, Extra<E>>,
 }
 
 #[repr(transparent)]
-pub struct ReadTagGuard<B, E: ?Sized = ()> {
-    raw: raw::ReadTagGuard<B, Extra<E>>,
+pub struct TagGuard<B, E: ?Sized = ()> {
+    raw: raw::TagGuard<B, Extra<E>>,
 }
 
 #[repr(transparent)]
@@ -27,7 +27,7 @@ pub struct Buffers<B, E: ?Sized = ()> {
     raw: raw::Buffers<B, Extra<E>>,
 }
 
-pub type ReadGuard<'read, B, T = B, E = ()> = raw::RawReadGuard<'read, T, ReadTagGuard<B, E>>;
+pub type ReaderGuard<'reader, B, T = B, E = ()> = raw::RawReaderGuard<'reader, T, TagGuard<B, E>>;
 
 struct Extra<E: ?Sized> {
     lock: Mutex<()>,
@@ -59,7 +59,7 @@ impl<B> Buffers<B> {
 
 impl<B, E> Buffers<B, E> {
     #[inline]
-    pub fn split(self) -> (Write<B, E>, Read<B, E>) { Arc::new(self).split_arc() }
+    pub fn split(self) -> (Reader<B, E>, Writer<B, E>) { Arc::new(self).split_arc() }
 
     #[inline]
     pub fn extra<Ex>(self, extra: Ex) -> Buffers<B, Ex> {
@@ -85,14 +85,14 @@ impl<B, E> Buffers<B, E> {
 }
 
 impl<B, E: ?Sized> Buffers<B, E> {
-    pub fn split_arc(self: Arc<Self>) -> (Write<B, E>, Read<B, E>) {
+    pub fn split_arc(self: Arc<Self>) -> (Reader<B, E>, Writer<B, E>) {
         let this = unsafe { Arc::from_raw(Arc::into_raw(self) as *const raw::Buffers<B, Extra<E>>) };
-        let (write, read) = this.split_arc();
-        (Write { raw: write }, Read { raw: read })
+        let (reader, writer) = this.split_arc();
+        (Reader { raw: reader }, Writer { raw: writer })
     }
 }
 
-impl<B, E: ?Sized> Read<B, E> {
+impl<B, E: ?Sized> Reader<B, E> {
     #[inline]
     pub fn try_clone(&self) -> Option<Self> {
         Some(Self {
@@ -104,16 +104,16 @@ impl<B, E: ?Sized> Read<B, E> {
     pub fn is_dangling(&self) -> bool { self.raw.is_dangling() }
 
     #[inline]
-    pub fn get(&mut self) -> ReadGuard<'_, B, B, E> { self.try_get().expect("Tried to read from a dangling `Read<B>`") }
+    pub fn get(&mut self) -> ReaderGuard<'_, B, B, E> {
+        self.try_get().expect("Tried to reader from a dangling `Reader<B>`")
+    }
 
     #[inline]
-    pub fn try_get(&mut self) -> Option<ReadGuard<'_, B, B, E>> {
-        fn map_tag_guard<B, E: ?Sized>(raw: raw::ReadTagGuard<B, Extra<E>>) -> ReadTagGuard<B, E> {
-            ReadTagGuard { raw }
-        }
+    pub fn try_get(&mut self) -> Option<ReaderGuard<'_, B, B, E>> {
+        fn map_tag_guard<B, E: ?Sized>(raw: raw::TagGuard<B, Extra<E>>) -> TagGuard<B, E> { TagGuard { raw } }
 
-        fn map_guard<B, E: ?Sized>(raw: raw::ReadGuard<B, B, Extra<E>>) -> ReadGuard<B, B, E> {
-            unsafe { raw::RawReadGuard::map_tag_guard(raw, map_tag_guard) }
+        fn map_guard<B, E: ?Sized>(raw: raw::ReaderGuard<B, B, Extra<E>>) -> ReaderGuard<B, B, E> {
+            unsafe { raw::RawReaderGuard::map_tag_guard(raw, map_tag_guard) }
         }
 
         self.raw.try_get().map(map_guard)
@@ -125,7 +125,7 @@ impl<B, E: ?Sized> Read<B, E> {
 fn sleep(lock: &Mutex<()>, cv: &Condvar) { cv.wait(&mut lock.lock()); }
 
 impl<B, E> Swap<B, E> {
-    pub fn reader(&self) -> Read<B, E> { Read { raw: self.raw.reader() } }
+    pub fn reader(&self) -> Reader<B, E> { Reader { raw: self.raw.reader() } }
 
     pub fn read(&self) -> &B { self.raw.read() }
 
@@ -136,25 +136,25 @@ impl<B, E> Swap<B, E> {
         sleep(lock, cv);
     }
 
-    pub fn continue_swap(self) -> Result<Write<B, E>, Self> {
+    pub fn continue_swap(self) -> Result<Writer<B, E>, Self> {
         match self.raw.continue_swap() {
-            Ok(raw) => Ok(Write { raw }),
+            Ok(raw) => Ok(Writer { raw }),
             Err(raw) => Err(Self { raw }),
         }
     }
 }
 
-impl<B, E: ?Sized> Write<B, E> {
+impl<B, E: ?Sized> Writer<B, E> {
     #[inline]
-    pub fn reader(&self) -> Read<B, E> { Read { raw: self.raw.reader() } }
+    pub fn reader(&self) -> Reader<B, E> { Reader { raw: self.raw.reader() } }
 
     #[inline]
     pub fn read(&self) -> &B { self.raw.read() }
 
     #[inline]
     pub fn split(&mut self) -> (&B, &mut B, &E) {
-        let (read, write, Extra { extra, .. }) = self.raw.split();
-        (read, write, extra)
+        let (reader, writer, Extra { extra, .. }) = self.raw.split();
+        (reader, writer, extra)
     }
 
     #[inline]
@@ -191,24 +191,24 @@ impl<B, E: ?Sized> Write<B, E> {
     }
 }
 
-impl<'a, B, Ex: ?Sized> ReadTagGuard<B, Ex> {
+impl<'a, B, Ex: ?Sized> TagGuard<B, Ex> {
     #[inline]
     pub fn extra(&self) -> &Ex { &self.raw.extra().extra }
 }
 
-impl<B, E: ?Sized> Deref for Write<B, E> {
+impl<B, E: ?Sized> Deref for Writer<B, E> {
     type Target = B;
 
     #[inline]
     fn deref(&self) -> &Self::Target { &self.raw }
 }
 
-impl<B, E: ?Sized> DerefMut for Write<B, E> {
+impl<B, E: ?Sized> DerefMut for Writer<B, E> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target { &mut self.raw }
 }
 
-impl<B, E: ?Sized> Drop for ReadTagGuard<B, E> {
+impl<B, E: ?Sized> Drop for TagGuard<B, E> {
     #[inline]
     fn drop(&mut self) { self.raw.extra().cv.notify_one(); }
 }

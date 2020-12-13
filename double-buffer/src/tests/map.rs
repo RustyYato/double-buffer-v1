@@ -35,7 +35,7 @@ impl<K: Clone + Hash + Eq, V: Clone> Operation<HashMap<K, V>> for MapOp<K, V> {
 
 #[test]
 fn map_ops() {
-    let (mut w, mut r) = crate::op::new_op_writer();
+    let (mut r, mut w) = crate::op::new_op_writer();
 
     w.apply(MapOp::Insert(0, "hello"));
     w.apply(MapOp::Insert(1, "world"));

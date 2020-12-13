@@ -6,50 +6,57 @@ pub trait Operation<B>: Sized {
     fn into_apply(mut self, buffer: &mut B) { self.apply(buffer) }
 }
 
-pub struct Write<B, O> {
-    write: raw::Write<B>,
+pub struct Writer<B, O> {
+    writer: raw::Writer<B>,
     ops: Vec<O>,
 }
 
-pub struct WriteRef<'a, B, O> {
+pub struct WriterRef<'a, B, O> {
     buffer: &'a mut B,
     ops: &'a mut Vec<O>,
 }
 
 #[inline]
-pub fn new_op_writer_with<B, O>(front: B, back: B) -> (Write<B, O>, raw::Read<B>) {
-    let (write, r) = raw::Buffers::new(front, back).split();
-    (Write::from(write), r)
+pub fn new_op_writer_with<B, O>(front: B, back: B) -> (raw::Reader<B>, Writer<B, O>) {
+    let (reader, writer) = raw::Buffers::new(front, back).split();
+    (reader, Writer::from(writer))
 }
 
 #[inline]
-pub fn new_op_writer<B: Default, O>() -> (Write<B, O>, raw::Read<B>) { new_op_writer_with(B::default(), B::default()) }
-
-impl<B, O> From<raw::Write<B>> for Write<B, O> {
-    #[inline]
-    fn from(write: raw::Write<B>) -> Self { Write { write, ops: Vec::new() } }
+pub fn new_op_writer<B: Default, O>() -> (raw::Reader<B>, Writer<B, O>) {
+    new_op_writer_with(B::default(), B::default())
 }
 
-impl<B, O> Write<B, O> {
-    pub fn reader(&self) -> raw::Read<B> { self.write.reader() }
+impl<B, O> From<raw::Writer<B>> for Writer<B, O> {
+    #[inline]
+    fn from(writer: raw::Writer<B>) -> Self {
+        Writer {
+            writer,
+            ops: Vec::new(),
+        }
+    }
+}
 
-    pub fn read(&self) -> &B { self.write.read() }
+impl<B, O> Writer<B, O> {
+    pub fn reader(&self) -> raw::Reader<B> { self.writer.reader() }
+
+    pub fn read(&self) -> &B { self.writer.read() }
 
     #[inline]
-    fn as_ref(&mut self) -> WriteRef<'_, B, O> {
-        WriteRef {
-            buffer: &mut self.write,
+    fn as_ref(&mut self) -> WriterRef<'_, B, O> {
+        WriterRef {
+            buffer: &mut self.writer,
             ops: &mut self.ops,
         }
     }
 }
 
-impl<B, O: Operation<B>> Write<B, O> {
+impl<B, O: Operation<B>> Writer<B, O> {
     #[inline]
-    pub fn split(&mut self) -> (&B, WriteRef<'_, B, O>) {
-        let (read, write, ()) = self.write.split();
-        (read, WriteRef {
-            buffer: write,
+    pub fn split(&mut self) -> (&B, WriterRef<'_, B, O>) {
+        let (reader, writer, ()) = self.writer.split();
+        (reader, WriterRef {
+            buffer: writer,
             ops: &mut self.ops,
         })
     }
@@ -62,8 +69,8 @@ impl<B, O: Operation<B>> Write<B, O> {
 
     #[cold]
     fn flush_slow(&mut self) {
-        self.write.swap_buffers();
-        let buffer = &mut self.write as &mut B;
+        self.writer.swap_buffers();
+        let buffer = &mut self.writer as &mut B;
         self.ops.drain(..).for_each(|op| op.into_apply(buffer))
     }
 
@@ -78,7 +85,7 @@ impl<B, O: Operation<B>> Write<B, O> {
     pub fn operations(&self) -> &[O] { &self.ops }
 }
 
-impl<B, O: Operation<B>> WriteRef<'_, B, O> {
+impl<B, O: Operation<B>> WriterRef<'_, B, O> {
     #[inline]
     pub fn apply(&mut self, mut op: O) {
         op.apply(self.buffer);
@@ -98,8 +105,8 @@ impl<B, O: Operation<B>> WriteRef<'_, B, O> {
     pub fn operations(&self) -> &[O] { &self.ops }
 
     #[inline]
-    pub fn by_ref(&mut self) -> WriteRef<'_, B, O> {
-        WriteRef {
+    pub fn by_ref(&mut self) -> WriterRef<'_, B, O> {
+        WriterRef {
             buffer: self.buffer,
             ops: self.ops,
         }

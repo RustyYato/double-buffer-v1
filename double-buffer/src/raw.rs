@@ -16,39 +16,26 @@ use slab::Slab;
 use smallvec::SmallVec;
 use spin::Mutex;
 
-type TagList = Mutex<Slab<Thin<AtomicTag>>>;
+type TagList = Mutex<Slab<Thin<AtomicU32>>>;
 
-#[derive(Debug)]
-struct AtomicTag {
-    epoch: AtomicU32,
-}
-
-impl AtomicTag {
-    fn new() -> Self {
-        Self {
-            epoch: AtomicU32::new(0),
-        }
-    }
-}
-
-pub struct Write<B, E: ?Sized = ()> {
+pub struct Writer<B, E: ?Sized = ()> {
     ptr: *mut B,
     buffers: Arc<Buffers<B, E>>,
 }
 
-pub struct Read<B, E: ?Sized = ()> {
+pub struct Reader<B, E: ?Sized = ()> {
     buffers: Weak<Buffers<B, E>>,
-    tag: Thin<AtomicTag>,
+    epoch: Thin<AtomicU32>,
 }
 
-pub type ReadGuard<'read, B, T = B, E = ()> = RawReadGuard<'read, T, ReadTagGuard<B, E>>;
-pub struct RawReadGuard<'read, T: ?Sized, TagGuard> {
-    value: &'read T,
+pub type ReaderGuard<'reader, B, T = B, E = ()> = RawReaderGuard<'reader, T, TagGuard<B, E>>;
+pub struct RawReaderGuard<'reader, T: ?Sized, TagGuard> {
+    value: &'reader T,
     tag_guard: TagGuard,
 }
 
-pub struct ReadTagGuard<B, E: ?Sized> {
-    tag: Thin<AtomicTag>,
+pub struct TagGuard<B, E: ?Sized> {
+    epoch: Thin<AtomicU32>,
     buffers: Arc<Buffers<B, E>>,
 }
 
@@ -59,20 +46,20 @@ pub struct Buffers<B, E: ?Sized = ()> {
     extra: E,
 }
 
-pub struct SwapPacket(SmallVec<[(Thin<AtomicTag>, u32); 8]>);
+pub struct RawSwap(SmallVec<[(Thin<AtomicU32>, u32); 8]>);
 
 pub struct Swap<B, E: ?Sized> {
-    write: Write<B, E>,
-    packet: SwapPacket,
+    writer: Writer<B, E>,
+    packet: RawSwap,
 }
 
 unsafe impl<B: Send, E: Send> Send for Buffers<B, E> {}
 unsafe impl<B: Sync, E: Sync> Sync for Buffers<B, E> {}
 
-unsafe impl<B: Send + Sync> Send for Write<B> {}
-unsafe impl<B: Send + Sync> Sync for Write<B> {}
+unsafe impl<B: Send + Sync, E: Send> Send for Writer<B, E> {}
+unsafe impl<B: Send + Sync, E: Sync> Sync for Writer<B, E> {}
 
-impl<B: Unpin> Unpin for Write<B> {}
+impl<B: Unpin> Unpin for Writer<B> {}
 
 impl<B: Default, E: Default> Default for Buffers<B, E> {
     #[inline]
@@ -93,7 +80,7 @@ impl<B> Buffers<B> {
 
 impl<B, E> Buffers<B, E> {
     #[inline]
-    pub fn split(self) -> (Write<B, E>, Read<B, E>) { Arc::new(self).split_arc() }
+    pub fn split(self) -> (Reader<B, E>, Writer<B, E>) { Arc::new(self).split_arc() }
 
     #[inline]
     pub fn extra<Ex>(self, extra: Ex) -> Buffers<B, Ex> {
@@ -120,42 +107,42 @@ impl<B, E: ?Sized> Buffers<B, E> {
     #[inline]
     fn as_ptr(&self) -> *mut B { self.raw.get().cast() }
 
-    pub fn split_arc(mut self: Arc<Self>) -> (Write<B, E>, Read<B, E>) {
+    pub fn split_arc(mut self: Arc<Self>) -> (Reader<B, E>, Writer<B, E>) {
         let buffers = Arc::get_mut(&mut self).expect("Cannot split a shared `Buffers`");
         let ptr = buffers.as_ptr();
         self.ptr.store(ptr, Ordering::Relaxed);
-        let read = Read::new(&self);
-        let write = Write {
+        let reader = Reader::new(&self);
+        let writer = Writer {
             ptr: unsafe { ptr.add(1) },
             buffers: self,
         };
-        (write, read)
+        (reader, writer)
     }
 }
 
 impl<B, E> Swap<B, E> {
-    pub fn reader(&self) -> Read<B, E> { self.write.reader() }
+    pub fn reader(&self) -> Reader<B, E> { self.writer.reader() }
 
-    pub fn read(&self) -> &B { self.write.read() }
+    pub fn read(&self) -> &B { self.writer.read() }
 
-    pub fn extra(&self) -> &E { self.write.extra() }
+    pub fn extra(&self) -> &E { self.writer.extra() }
 
-    pub fn continue_swap(mut self) -> Result<Write<B, E>, Self> {
+    pub fn continue_swap(mut self) -> Result<Writer<B, E>, Self> {
         if unsafe { self.packet.continue_buffer_swap_unchecked() } {
             Err(self)
         } else {
-            Ok(self.write)
+            Ok(self.writer)
         }
     }
 }
 
-impl SwapPacket {
+impl RawSwap {
     pub unsafe fn continue_buffer_swap_unchecked(&mut self) -> bool {
         let tags = &mut self.0;
 
-        tags.retain(|(tag, enter_epoch)| {
+        tags.retain(|(epoch, enter_epoch)| {
             let enter_epoch = *enter_epoch;
-            let current_epoch = tag.epoch.load(Ordering::Relaxed);
+            let current_epoch = epoch.load(Ordering::Relaxed);
             current_epoch == enter_epoch
         });
 
@@ -168,9 +155,9 @@ impl SwapPacket {
     }
 }
 
-impl<B, E: ?Sized> Write<B, E> {
+impl<B, E: ?Sized> Writer<B, E> {
     #[inline]
-    pub fn reader(&self) -> Read<B, E> { Read::new(&self.buffers) }
+    pub fn reader(&self) -> Reader<B, E> { Reader::new(&self.buffers) }
 
     #[inline]
     pub fn read(&self) -> &B {
@@ -182,21 +169,21 @@ impl<B, E: ?Sized> Write<B, E> {
     }
 
     #[inline]
+    pub fn extra(&self) -> &E { &self.buffers.extra }
+
+    #[inline]
     pub fn split(&mut self) -> (&B, &mut B, &E) {
         unsafe {
             let buffers = &(*self.buffers);
-            let read_ptr = &buffers.ptr;
-            let read_ptr = read_ptr as *const AtomicPtr<B> as *const *const B;
-            (&**read_ptr, &mut *self.ptr, &buffers.extra)
+            let reader_ptr = &buffers.ptr;
+            let reader_ptr = reader_ptr as *const AtomicPtr<B> as *const *const B;
+            (&**reader_ptr, &mut *self.ptr, &buffers.extra)
         }
     }
 
-    #[inline]
-    pub fn extra(&self) -> &E { &self.buffers.extra }
-
     pub fn start_buffer_swap(mut self) -> Swap<B, E> {
         let packet = unsafe { self.start_buffer_swap_unchecked() };
-        Swap { write: self, packet }
+        Swap { writer: self, packet }
     }
 
     #[inline]
@@ -210,9 +197,9 @@ impl<B, E: ?Sized> Write<B, E> {
 
     #[inline]
     pub fn swap_buffers_with<'a, F: FnMut(&'a E)>(&'a mut self, ref mut callback: F) {
-        fn swap_buffers_with<'a, B, E: ?Sized>(write: &'a mut Write<B, E>, callback: &mut dyn FnMut(&'a E)) {
-            let mut packet = unsafe { write.start_buffer_swap_unchecked() };
-            let extra = write.extra();
+        fn swap_buffers_with<'a, B, E: ?Sized>(writer: &'a mut Writer<B, E>, callback: &mut dyn FnMut(&'a E)) {
+            let mut packet = unsafe { writer.start_buffer_swap_unchecked() };
+            let extra = writer.extra();
 
             while unsafe { packet.continue_buffer_swap_unchecked() } {
                 callback(extra);
@@ -222,17 +209,18 @@ impl<B, E: ?Sized> Write<B, E> {
         swap_buffers_with(self, callback)
     }
 
+    #[inline]
     pub async fn async_swap_buffers_with<'a, F, A>(&'a mut self, ref mut callback: F)
     where
         F: FnMut(&'a E) -> A,
         A: Future<Output = ()>,
     {
         async fn swap_buffers_with<'a, B, E: ?Sized, A: Future<Output = ()>>(
-            write: &'a mut Write<B, E>,
+            writer: &'a mut Writer<B, E>,
             callback: &mut dyn FnMut(&'a E) -> A,
         ) {
-            let mut packet = unsafe { write.start_buffer_swap_unchecked() };
-            let extra = write.extra();
+            let mut packet = unsafe { writer.start_buffer_swap_unchecked() };
+            let extra = writer.extra();
 
             while unsafe { packet.continue_buffer_swap_unchecked() } {
                 callback(extra).await;
@@ -242,21 +230,21 @@ impl<B, E: ?Sized> Write<B, E> {
         swap_buffers_with(self, callback).await
     }
 
-    pub unsafe fn start_buffer_swap_unchecked(&mut self) -> SwapPacket {
+    pub unsafe fn start_buffer_swap_unchecked(&mut self) -> RawSwap {
         atomic::fence(Ordering::SeqCst);
 
         self.ptr = self.buffers.ptr.swap(self.ptr, Ordering::Release);
 
-        SwapPacket(
+        RawSwap(
             self.buffers
                 .tag_list
                 .lock()
                 .iter()
                 // anything that is potentially accessing a buffer right now
-                .filter_map(|(_, tag)| {
-                    let tag_value = tag.epoch.load(Ordering::Relaxed);
+                .filter_map(|(_, epoch)| {
+                    let tag_value = epoch.load(Ordering::Relaxed);
                     if tag_value % 2 == 1 {
-                        Some((tag.clone(), tag_value))
+                        Some((epoch.clone(), tag_value))
                     } else {
                         None
                     }
@@ -271,14 +259,14 @@ impl<B, E: ?Sized> Write<B, E> {
     }
 }
 
-impl<B, E: ?Sized> Read<B, E> {
+impl<B, E: ?Sized> Reader<B, E> {
     #[inline]
     fn new(buffers: &Arc<Buffers<B, E>>) -> Self {
-        let tag = Thin::new(AtomicTag::new());
-        buffers.tag_list.lock().insert(tag.clone());
+        let epoch = Thin::new(AtomicU32::new(0));
+        buffers.tag_list.lock().insert(epoch.clone());
         Self {
             buffers: Arc::downgrade(buffers),
-            tag,
+            epoch,
         }
     }
 
@@ -289,62 +277,64 @@ impl<B, E: ?Sized> Read<B, E> {
     pub fn is_dangling(&self) -> bool { self.buffers.strong_count() == 0 }
 
     #[inline]
-    pub fn get(&mut self) -> ReadGuard<'_, B, B, E> { self.try_get().expect("Tried to read from a dangling `Read<B>`") }
+    pub fn get(&mut self) -> ReaderGuard<'_, B, B, E> {
+        self.try_get().expect("Tried to reader from a dangling `Reader<B>`")
+    }
 
     #[inline]
-    pub fn try_get(&mut self) -> Option<ReadGuard<'_, B, B, E>> {
-        self.tag.epoch.fetch_add(1, Ordering::Acquire);
+    pub fn try_get(&mut self) -> Option<ReaderGuard<'_, B, B, E>> {
+        self.epoch.fetch_add(1, Ordering::Acquire);
 
         let buffers = self.buffers.upgrade()?;
         let buffer = (*buffers).ptr.load(Ordering::Acquire);
 
-        Some(ReadGuard {
+        Some(ReaderGuard {
             value: unsafe { &*buffer },
-            tag_guard: ReadTagGuard {
+            tag_guard: TagGuard {
                 buffers,
-                tag: self.tag.clone(),
+                epoch: self.epoch.clone(),
             },
         })
     }
 }
 
-impl<'a, B, E: ?Sized> ReadTagGuard<B, E> {
+impl<'a, B, E: ?Sized> TagGuard<B, E> {
     pub fn extra(&self) -> &E { &self.buffers.extra }
 }
 
-impl<'a, T: ?Sized, TagGuard> RawReadGuard<'a, T, TagGuard> {
+impl<'a, T: ?Sized, TagGuard> RawReaderGuard<'a, T, TagGuard> {
     #[inline]
     pub fn tag_guard(this: &Self) -> &TagGuard { &this.tag_guard }
 
     pub unsafe fn map_tag_guard<NewTagGuard>(
         this: Self,
         f: impl FnOnce(TagGuard) -> NewTagGuard,
-    ) -> RawReadGuard<'a, T, NewTagGuard> {
-        RawReadGuard {
+    ) -> RawReaderGuard<'a, T, NewTagGuard> {
+        RawReaderGuard {
             value: this.value,
             tag_guard: f(this.tag_guard),
         }
     }
 
     #[inline]
-    pub fn map<F, U: ?Sized>(this: Self, f: F) -> RawReadGuard<'a, U, TagGuard>
+    pub fn map<F, U: ?Sized>(this: Self, f: F) -> RawReaderGuard<'a, U, TagGuard>
     where
         F: for<'val> FnOnce(&'val T, &TagGuard) -> &'val U,
     {
-        RawReadGuard {
+        RawReaderGuard {
             value: f(this.value, Self::tag_guard(&this)),
             tag_guard: this.tag_guard,
         }
     }
 
     #[inline]
-    pub fn try_map<F, U: ?Sized>(this: Self, f: F) -> Result<RawReadGuard<'a, U, TagGuard>, Self>
+    pub fn try_map<F, U: ?Sized>(this: Self, f: F) -> Result<RawReaderGuard<'a, U, TagGuard>, Self>
     where
         F: for<'val> FnOnce(&'val T, &TagGuard) -> Option<&'val U>,
     {
         match f(this.value, Self::tag_guard(&this)) {
             None => Err(this),
-            Some(value) => Ok(RawReadGuard {
+            Some(value) => Ok(RawReaderGuard {
                 value,
                 tag_guard: this.tag_guard,
             }),
@@ -352,13 +342,13 @@ impl<'a, T: ?Sized, TagGuard> RawReadGuard<'a, T, TagGuard> {
     }
 
     #[inline]
-    pub fn try_map_res<F, U: ?Sized, E>(this: Self, f: F) -> Result<RawReadGuard<'a, U, TagGuard>, (Self, E)>
+    pub fn try_map_res<F, U: ?Sized, E>(this: Self, f: F) -> Result<RawReaderGuard<'a, U, TagGuard>, (Self, E)>
     where
         F: for<'val> FnOnce(&'val T, &TagGuard) -> Result<&'val U, E>,
     {
         match f(this.value, Self::tag_guard(&this)) {
             Err(e) => Err((this, e)),
-            Ok(value) => Ok(RawReadGuard {
+            Ok(value) => Ok(RawReaderGuard {
                 value,
                 tag_guard: this.tag_guard,
             }),
@@ -366,26 +356,26 @@ impl<'a, T: ?Sized, TagGuard> RawReadGuard<'a, T, TagGuard> {
     }
 }
 
-impl<B, E: ?Sized> Deref for Write<B, E> {
+impl<B, E: ?Sized> Deref for Writer<B, E> {
     type Target = B;
 
     #[inline]
     fn deref(&self) -> &Self::Target { unsafe { &*self.ptr } }
 }
 
-impl<B, E: ?Sized> DerefMut for Write<B, E> {
+impl<B, E: ?Sized> DerefMut for Writer<B, E> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target { unsafe { &mut *self.ptr } }
 }
 
-impl<T: ?Sized, TagGuard> Deref for RawReadGuard<'_, T, TagGuard> {
+impl<T: ?Sized, TagGuard> Deref for RawReaderGuard<'_, T, TagGuard> {
     type Target = T;
 
     #[inline]
     fn deref(&self) -> &Self::Target { self.value }
 }
 
-impl<B, E: ?Sized> Drop for ReadTagGuard<B, E> {
+impl<B, E: ?Sized> Drop for TagGuard<B, E> {
     #[inline]
-    fn drop(&mut self) { self.tag.epoch.fetch_add(1, Ordering::Release); }
+    fn drop(&mut self) { self.epoch.fetch_add(1, Ordering::Release); }
 }
