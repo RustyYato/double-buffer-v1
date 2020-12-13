@@ -1,6 +1,7 @@
 use core::pin::Pin;
 use std::{
     cell::UnsafeCell,
+    future::Future,
     marker::Unpin,
     ops::{Deref, DerefMut},
     ptr,
@@ -140,10 +141,29 @@ impl<B, E> Swap<B, E> {
     pub fn extra(&self) -> &E { self.write.extra() }
 
     pub fn continue_swap(mut self) -> Result<Write<B, E>, Self> {
-        if unsafe { self.write.continue_buffer_swap_unchecked(&mut self.packet) } {
+        if unsafe { self.packet.continue_buffer_swap_unchecked() } {
             Err(self)
         } else {
             Ok(self.write)
+        }
+    }
+}
+
+impl SwapPacket {
+    pub unsafe fn continue_buffer_swap_unchecked(&mut self) -> bool {
+        let tags = &mut self.0;
+
+        tags.retain(|(tag, enter_epoch)| {
+            let enter_epoch = *enter_epoch;
+            let current_epoch = tag.epoch.load(Ordering::Relaxed);
+            current_epoch == enter_epoch
+        });
+
+        if tags.is_empty() {
+            atomic::fence(Ordering::SeqCst);
+            false
+        } else {
+            true
         }
     }
 }
@@ -191,10 +211,9 @@ impl<B, E: ?Sized> Write<B, E> {
     #[inline]
     pub fn swap_buffers_with<F: FnMut(&E)>(&mut self, ref mut callback: F) {
         fn swap_buffers_with<B, E: ?Sized>(write: &mut Write<B, E>, callback: &mut dyn FnMut(&E)) {
-            let mut swap = unsafe { write.start_buffer_swap_unchecked() };
-            let swap = &mut swap;
+            let mut packet = unsafe { write.start_buffer_swap_unchecked() };
 
-            while unsafe { write.continue_buffer_swap_unchecked(swap) } {
+            while unsafe { packet.continue_buffer_swap_unchecked() } {
                 callback(write.extra());
             }
         }
@@ -202,7 +221,27 @@ impl<B, E: ?Sized> Write<B, E> {
         swap_buffers_with(self, callback)
     }
 
-    unsafe fn start_buffer_swap_unchecked(&mut self) -> SwapPacket {
+    pub async fn async_swap_buffers_with<'a, F, A>(&'a mut self, ref mut callback: F)
+    where
+        F: FnMut(&'a E) -> A,
+        A: Future<Output = ()>,
+    {
+        async fn swap_buffers_with<'a, B, E: ?Sized, A: Future<Output = ()>>(
+            write: &'a mut Write<B, E>,
+            callback: &mut dyn FnMut(&'a E) -> A,
+        ) {
+            let mut packet = unsafe { write.start_buffer_swap_unchecked() };
+            let extra = write.extra();
+
+            while unsafe { packet.continue_buffer_swap_unchecked() } {
+                callback(extra).await;
+            }
+        }
+
+        swap_buffers_with(self, callback).await
+    }
+
+    pub unsafe fn start_buffer_swap_unchecked(&mut self) -> SwapPacket {
         atomic::fence(Ordering::SeqCst);
 
         self.ptr = self.buffers.ptr.swap(self.ptr, Ordering::Release);
@@ -223,23 +262,6 @@ impl<B, E: ?Sized> Write<B, E> {
                 })
                 .collect(),
         )
-    }
-
-    unsafe fn continue_buffer_swap_unchecked(&mut self, packet: &mut SwapPacket) -> bool {
-        let tags = &mut packet.0;
-
-        tags.retain(|(tag, enter_epoch)| {
-            let enter_epoch = *enter_epoch;
-            let current_epoch = tag.epoch.load(Ordering::Relaxed);
-            current_epoch == enter_epoch
-        });
-
-        if tags.is_empty() {
-            atomic::fence(Ordering::SeqCst);
-            false
-        } else {
-            true
-        }
     }
 
     #[inline]
