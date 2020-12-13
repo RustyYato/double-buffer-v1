@@ -18,8 +18,13 @@ use spin::Mutex;
 
 type TagList = Mutex<Slab<Thin<AtomicU32>>>;
 
+struct SyncPtr<B>(*mut B);
+
+unsafe impl<B> Send for SyncPtr<B> {}
+unsafe impl<B> Sync for SyncPtr<B> {}
+
 pub struct Writer<B, E: ?Sized = ()> {
-    ptr: *mut B,
+    ptr: SyncPtr<B>,
     buffers: Arc<Buffers<B, E>>,
 }
 
@@ -55,9 +60,6 @@ pub struct Swap<B, E: ?Sized> {
 
 unsafe impl<B: Send, E: Send> Send for Buffers<B, E> {}
 unsafe impl<B: Sync, E: Sync> Sync for Buffers<B, E> {}
-
-unsafe impl<B: Send + Sync, E: Send> Send for Writer<B, E> {}
-unsafe impl<B: Send + Sync, E: Sync> Sync for Writer<B, E> {}
 
 impl<B: Unpin> Unpin for Writer<B> {}
 
@@ -113,7 +115,7 @@ impl<B, E: ?Sized> Buffers<B, E> {
         self.ptr.store(ptr, Ordering::Relaxed);
         let reader = Reader::new(&self);
         let writer = Writer {
-            ptr: unsafe { ptr.add(1) },
+            ptr: unsafe { SyncPtr(ptr.add(1)) },
             buffers: self,
         };
         (reader, writer)
@@ -177,7 +179,7 @@ impl<B, E: ?Sized> Writer<B, E> {
             let buffers = &(*self.buffers);
             let reader_ptr = &buffers.ptr;
             let reader_ptr = reader_ptr as *const AtomicPtr<B> as *const *const B;
-            (&**reader_ptr, &mut *self.ptr, &buffers.extra)
+            (&**reader_ptr, &mut *self.ptr.0, &buffers.extra)
         }
     }
 
@@ -233,7 +235,7 @@ impl<B, E: ?Sized> Writer<B, E> {
     pub unsafe fn start_buffer_swap_unchecked(&mut self) -> RawSwap {
         atomic::fence(Ordering::SeqCst);
 
-        self.ptr = self.buffers.ptr.swap(self.ptr, Ordering::Release);
+        self.ptr.0 = self.buffers.ptr.swap(self.ptr.0, Ordering::Release);
 
         RawSwap(
             self.buffers
@@ -360,12 +362,12 @@ impl<B, E: ?Sized> Deref for Writer<B, E> {
     type Target = B;
 
     #[inline]
-    fn deref(&self) -> &Self::Target { unsafe { &*self.ptr } }
+    fn deref(&self) -> &Self::Target { unsafe { &*self.ptr.0 } }
 }
 
 impl<B, E: ?Sized> DerefMut for Writer<B, E> {
     #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target { unsafe { &mut *self.ptr } }
+    fn deref_mut(&mut self) -> &mut Self::Target { unsafe { &mut *self.ptr.0 } }
 }
 
 impl<T: ?Sized, TagGuard> Deref for RawReaderGuard<'_, T, TagGuard> {
