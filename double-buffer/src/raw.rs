@@ -209,12 +209,13 @@ impl<B, E: ?Sized> Write<B, E> {
     }
 
     #[inline]
-    pub fn swap_buffers_with<F: FnMut(&E)>(&mut self, ref mut callback: F) {
-        fn swap_buffers_with<B, E: ?Sized>(write: &mut Write<B, E>, callback: &mut dyn FnMut(&E)) {
+    pub fn swap_buffers_with<'a, F: FnMut(&'a E)>(&'a mut self, ref mut callback: F) {
+        fn swap_buffers_with<'a, B, E: ?Sized>(write: &'a mut Write<B, E>, callback: &mut dyn FnMut(&'a E)) {
             let mut packet = unsafe { write.start_buffer_swap_unchecked() };
+            let extra = write.extra();
 
             while unsafe { packet.continue_buffer_swap_unchecked() } {
-                callback(write.extra());
+                callback(extra);
             }
         }
 

@@ -166,12 +166,9 @@ impl<B, E: ?Sized> Write<B, E> {
         }
     }
 
-    pub fn swap_buffers(&mut self) {
-        fn noop<E: ?Sized>(_: &E) {}
-        self.swap_buffers_with(noop);
-    }
+    pub fn swap_buffers(&mut self) { self.swap_buffers_with(drop); }
 
-    pub fn swap_buffers_with<F: FnMut(&E)>(&mut self, mut callback: F) {
+    pub fn swap_buffers_with<'a, F: FnMut(&'a E)>(&'a mut self, mut callback: F) {
         use crossbeam_utils::Backoff;
 
         let backoff = Backoff::new();
