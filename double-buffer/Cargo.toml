@@ -12,12 +12,10 @@ nightly = ['smallvec/union']
 
 [dependencies]
 slab = { version = '0.4', default-features = false }
-parking_lot = { version = '0.11' }
+parking_lot = { version = '0.11', optional = true }
 crossbeam-utils = '0.8'
-# parking_lot = { version = '0.11', optional = true }
 spin = '0.7'
 smallvec = '1'
 
 [dev-dependencies]
-crossbeam-utils = '0.8'
 crossbeam-channel = '0.5'

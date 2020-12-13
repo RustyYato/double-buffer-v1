@@ -3,6 +3,7 @@ use crossbeam_utils::thread::scope;
 
 use crate::raw::Buffers;
 
+#[cfg(feature = "parking_lot")]
 mod map;
 
 #[test]
