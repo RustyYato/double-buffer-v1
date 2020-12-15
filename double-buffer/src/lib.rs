@@ -1,3 +1,8 @@
+#![cfg_attr(not(feature = "std"), no_std)]
+
+#[cfg(not(feature = "std"))]
+extern crate alloc as std;
+
 pub mod local;
 pub mod raw;
 
@@ -7,6 +12,7 @@ pub mod blocking;
 #[forbid(unsafe_code)]
 pub mod op;
 
+mod backoff;
 mod thin;
 
 #[cfg(test)]

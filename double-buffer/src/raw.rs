@@ -1,22 +1,20 @@
-use core::pin::Pin;
-use std::{
+use core::{
     cell::UnsafeCell,
     future::Future,
     marker::Unpin,
     ops::{Deref, DerefMut},
+    pin::Pin,
     ptr,
-    sync::{
-        atomic::{self, AtomicPtr, AtomicU32, Ordering},
-        Arc, Weak,
-    },
+    sync::atomic::{self, AtomicPtr, AtomicU32, Ordering},
 };
 
+use std::sync::{Arc, Weak};
+
 use crate::thin::Thin;
-use slab::Slab;
 use smallvec::SmallVec;
 use spin::Mutex;
 
-type TagList = Mutex<Slab<Thin<AtomicU32>>>;
+type TagList = Mutex<SmallVec<[Thin<AtomicU32>; 8]>>;
 
 struct SyncPtr<B>(*mut B);
 
@@ -186,7 +184,7 @@ impl<B, E: ?Sized> Writer<B, E> {
 
     #[inline]
     pub fn swap_buffers(&mut self) {
-        use crossbeam_utils::Backoff;
+        use crate::backoff::Backoff;
 
         let backoff = Backoff::new();
 
@@ -233,22 +231,17 @@ impl<B, E: ?Sized> Writer<B, E> {
 
         self.ptr.0 = self.buffers.ptr.swap(self.ptr.0, Ordering::Release);
 
-        RawSwap(
-            self.buffers
-                .tag_list
-                .lock()
-                .iter()
-                // anything that is potentially accessing a buffer right now
-                .filter_map(|(_, epoch)| {
-                    let tag_value = epoch.load(Ordering::Relaxed);
-                    if tag_value % 2 == 1 {
-                        Some((epoch.clone(), tag_value))
-                    } else {
-                        None
-                    }
-                })
-                .collect(),
-        )
+        let mut active_readers = SmallVec::new();
+
+        self.buffers.tag_list.lock().retain(|epoch| {
+            let tag_value = epoch.load(Ordering::Relaxed);
+            if tag_value % 2 == 1 {
+                active_readers.push((epoch.clone(), tag_value));
+            }
+            Thin::strong_count(&epoch) != 1
+        });
+
+        RawSwap(active_readers)
     }
 
     #[inline]
@@ -261,7 +254,7 @@ impl<B, E: ?Sized> Reader<B, E> {
     #[inline]
     fn new(buffers: &Arc<Buffers<B, E>>) -> Self {
         let epoch = Thin::new(AtomicU32::new(0));
-        buffers.tag_list.lock().insert(epoch.clone());
+        buffers.tag_list.lock().push(epoch.clone());
         Self {
             buffers: Arc::downgrade(buffers),
             epoch,

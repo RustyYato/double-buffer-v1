@@ -169,7 +169,7 @@ impl<B, E: ?Sized> Writer<B, E> {
     pub fn swap_buffers(&mut self) { self.swap_buffers_with(drop); }
 
     pub fn swap_buffers_with<'a, F: FnMut(&'a E)>(&'a mut self, mut callback: F) {
-        use crossbeam_utils::Backoff;
+        use crate::backoff::Backoff;
 
         let backoff = Backoff::new();
 

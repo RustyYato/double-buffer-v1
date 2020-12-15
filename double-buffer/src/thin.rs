@@ -1,4 +1,5 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
+use std::boxed::Box;
 
 pub struct Thin<T> {
     ptr: *mut Package<T>,
@@ -23,19 +24,19 @@ impl<T> Thin<T> {
     }
 }
 
-impl<T> std::ops::Deref for Thin<T> {
+impl<T> Thin<T> {
+    pub fn strong_count(this: &Self) -> usize { unsafe { (*this.ptr).strong.load(Ordering::Acquire) } }
+}
+
+impl<T> core::ops::Deref for Thin<T> {
     type Target = T;
 
-    fn deref(&self) -> &Self::Target {
-        unsafe { &(*self.ptr).value }
-    }
+    fn deref(&self) -> &Self::Target { unsafe { &(*self.ptr).value } }
 }
 
 use std::fmt;
 impl<T: fmt::Debug> fmt::Debug for Thin<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        T::fmt(self, f)
-    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { T::fmt(self, f) }
 }
 
 impl<T> Clone for Thin<T> {
