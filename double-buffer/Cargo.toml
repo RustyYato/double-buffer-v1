@@ -9,14 +9,17 @@ edition = "2018"
 [features]
 
 default = ['std']
-std = ['parking_lot']
-nightly = ['smallvec/union']
+std = ['parking_lot', 'alloc']
+alloc = ['smallvec']
 
 [dependencies]
 spin = '0.7'
+crossbeam-utils = { version = '0.8', default-features = false }
 parking_lot = { version = '0.11', optional = true }
-smallvec = { version = '1', default-features = false }
+smallvec = { version = '1', optional = true, default-features = false }
+radium = { version = '0.6', default-features = false }
 
 [dev-dependencies]
-crossbeam-channel = '0.5'
-crossbeam-utils = '0.8'
+# use old versions to avoid https://github.com/rust-lang/cargo/issues/1796
+test-crossbeam-channel = { version = '0.4', package = 'crossbeam-channel' }
+test-crossbeam-utils = { version = '0.7', package = 'crossbeam-utils' }

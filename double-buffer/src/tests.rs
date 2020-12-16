@@ -1,52 +1,58 @@
-use crossbeam_channel::bounded;
-use crossbeam_utils::thread::scope;
+use test_crossbeam_channel::bounded;
+use test_crossbeam_utils::thread::scope;
 
-use crate::raw::Buffers;
+use crate::{new, sync::BufferData, Writer};
 
-#[cfg(feature = "parking_lot")]
+#[cfg(feature = "std")]
 mod map;
 
 #[test]
 pub fn is_dangling() {
-    let (r, _) = Buffers::new((), ()).split();
+    let mut buffer_data = Box::pin(BufferData::new((), ()));
+    let (r, _) = new(buffer_data.as_mut());
 
     assert!(r.is_dangling());
 }
 
 #[test]
 fn clone_read() {
-    let (r, _w) = Buffers::new((), ()).split();
+    let mut buffer_data = Box::pin(BufferData::new((), ()));
+    let (r, _w) = new(buffer_data.as_mut());
 
     r.try_clone().unwrap();
 }
 
 #[test]
 fn write_before_read() {
-    let (mut r, mut w) = Buffers::new(0, 0).split();
+    let mut buffer_data = Box::pin(BufferData::new(0, 0));
+    let (mut r, mut w) = new(buffer_data.as_mut());
 
     let buffer = &mut *w;
     *buffer = 20;
     assert_eq!(*r.get(), 0);
-    w.swap_buffers();
+    Writer::swap_buffers(&mut w);
     assert_eq!(*r.get(), 20);
-    w.swap_buffers();
+    Writer::swap_buffers(&mut w);
     assert_eq!(*r.get(), 0);
 }
 
 #[test]
 #[ignore = "this test will block forever"]
 fn swap_while_read() {
-    let (mut r, mut w) = Buffers::new(0, 0).split();
+    let mut buffer_data = Box::pin(BufferData::new(0, 0));
+    let (mut r, mut w) = new(buffer_data.as_mut());
 
     let _guard = r.get();
 
-    w.swap_buffers();
+    Writer::swap_buffers(&mut w);
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn wait() {
-    let (mut r, mut w) = Buffers::new(0, 0).split();
+    let mut buffer_data = Box::pin(BufferData::new(0, 0));
+    let (mut r, mut w) = new(buffer_data.as_mut());
+
     let r = &mut r;
 
     let (tx0, rx0) = bounded(1);
@@ -63,7 +69,7 @@ fn wait() {
         });
 
         let _ = rx0.recv();
-        w.swap_buffers();
+        Writer::swap_buffers(&mut w);
         let _ = tx1.send(());
         let _ = rx2.recv();
     });
@@ -72,7 +78,8 @@ fn wait() {
 #[test]
 #[ignore = "this test will block forever"]
 fn blocks() {
-    let (mut r, mut w) = Buffers::new(0, 0).split();
+    let mut buffer_data = Box::pin(BufferData::new(0, 0));
+    let (mut r, mut w) = new(buffer_data.as_mut());
 
     let (tx0, rx0) = bounded(1);
     let (tx1, rx1) = bounded(1);
@@ -87,6 +94,6 @@ fn blocks() {
 
         let _y = rx1.recv().unwrap();
 
-        w.swap_buffers();
+        Writer::swap_buffers(&mut w);
     });
 }

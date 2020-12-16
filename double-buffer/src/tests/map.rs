@@ -1,5 +1,5 @@
 use crate::op::Operation;
-use std::{collections::HashMap, hash::Hash};
+use std::{collections::HashMap, hash::Hash, rc::Rc};
 
 pub enum MapOp<K, V> {
     Insert(K, V),
@@ -20,7 +20,7 @@ impl<K: Clone + Hash + Eq, V: Clone> Operation<HashMap<K, V>> for MapOp<K, V> {
         }
     }
 
-    fn into_apply(self, buffer: &mut HashMap<K, V>) {
+    fn apply_once(self, buffer: &mut HashMap<K, V>) {
         match self {
             MapOp::Insert(k, v) => {
                 buffer.insert(k, v);
@@ -35,7 +35,9 @@ impl<K: Clone + Hash + Eq, V: Clone> Operation<HashMap<K, V>> for MapOp<K, V> {
 
 #[test]
 fn map_ops() {
-    let (mut r, mut w) = crate::op::new_op_writer();
+    let buffer_data = Rc::pin(crate::local::BufferData::<_, ()>::default());
+    let (mut r, w) = crate::new(buffer_data);
+    let mut w = crate::op::Writer::from(w);
 
     w.apply(MapOp::Insert(0, "hello"));
     w.apply(MapOp::Insert(1, "world"));

@@ -1,83 +1,432 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(feature = "alloc", not(feature = "std")))]
 extern crate alloc as std;
 
-pub mod local;
-pub mod raw;
-
-#[cfg(feature = "parking_lot")]
-pub mod blocking;
-#[cfg(feature = "parking_lot")]
-#[forbid(unsafe_code)]
+#[cfg(feature = "alloc")]
 pub mod op;
 
-mod backoff;
-mod thin;
+#[cfg(feature = "alloc")]
+pub mod thin;
+
+pub mod atomic;
+pub mod local;
+#[cfg(feature = "alloc")]
+pub mod sync;
 
 #[cfg(test)]
 mod tests;
 
-pub struct RawReaderGuard<'reader, T: ?Sized, TagGuard> {
+mod buffer_ref;
+
+use core::{
+    cell::UnsafeCell,
+    marker::PhantomPinned,
+    mem::ManuallyDrop,
+    ops::{Deref, DerefMut},
+    pin::Pin,
+    sync::atomic::Ordering,
+};
+use radium::Radium;
+
+pub unsafe trait TrustedRadium: Radium {
+    #[doc(hidden)]
+    unsafe fn load_unchecked(&self) -> Self::Item;
+}
+
+unsafe impl TrustedRadium for core::cell::Cell<bool> {
+    #[doc(hidden)]
+    unsafe fn load_unchecked(&self) -> Self::Item { self.get() }
+}
+
+unsafe impl TrustedRadium for core::sync::atomic::AtomicBool {
+    #[doc(hidden)]
+    unsafe fn load_unchecked(&self) -> Self::Item {
+        core::ptr::read(self as *const core::sync::atomic::AtomicBool as *const bool)
+    }
+}
+
+unsafe impl TrustedRadium for core::cell::Cell<usize> {
+    #[doc(hidden)]
+    unsafe fn load_unchecked(&self) -> Self::Item { self.get() }
+}
+
+unsafe impl TrustedRadium for core::sync::atomic::AtomicUsize {
+    #[doc(hidden)]
+    unsafe fn load_unchecked(&self) -> Self::Item {
+        core::ptr::read(self as *const core::sync::atomic::AtomicUsize as *const usize)
+    }
+}
+
+pub type BufferRefData<BR> = BufferData<
+    <BR as BufferRef>::RawPtr,
+    <BR as BufferRef>::Buffer,
+    <BR as BufferRef>::Strategy,
+    <BR as BufferRef>::Extra,
+>;
+
+type ReaderTag<BR> = <<BR as BufferRef>::Strategy as Strategy>::ReaderTag;
+type Capture<BR> = <<BR as BufferRef>::Strategy as Strategy>::Capture;
+
+pub unsafe trait BufferRef: Sized {
+    type RawPtr: TrustedRadium<Item = bool>;
+    type Buffer;
+    type Strategy: Strategy;
+    type Extra: ?Sized;
+    type UpgradeError: core::fmt::Debug;
+
+    type Strong: Clone + Deref<Target = BufferRefData<Self>>;
+    type Weak: Clone;
+
+    fn split(self) -> (Pin<Self::Strong>, Self::Weak);
+
+    fn is_dangling(weak: &Self::Weak) -> bool;
+
+    fn upgrade(weak: &Self::Weak) -> Result<Pin<Self::Strong>, Self::UpgradeError>;
+
+    unsafe fn downgrade(strong: &Self::Strong) -> Self::Weak;
+}
+
+pub unsafe trait Strategy: Sized {
+    type ReaderTag;
+    type Capture;
+    type RawGuard;
+
+    fn create_tag(&self) -> Self::ReaderTag;
+
+    fn fence(&self);
+
+    fn capture_readers(&self) -> Self::Capture;
+
+    fn is_capture_complete(&self, capture: &mut Self::Capture) -> bool;
+
+    fn begin_guard(&self, tag: &Self::ReaderTag) -> Self::RawGuard;
+
+    fn end_guard(&self, guard: Self::RawGuard);
+}
+
+// pub unsafe trait Capture: Strategy {}
+
+pub struct Writer<B: BufferRef> {
+    inner: B::Strong,
+}
+
+pub struct Reader<B: BufferRef> {
+    inner: B::Weak,
+    tag: ReaderTag<B>,
+}
+
+pub struct ReaderGuard<'reader, B: BufferRef, T: ?Sized = <B as BufferRef>::Buffer> {
     value: &'reader T,
-    tag_guard: TagGuard,
+    raw: RawGuard<B>,
 }
 
-impl<'a, T: ?Sized, TagGuard> RawReaderGuard<'a, T, TagGuard> {
-    #[inline]
-    pub fn tag_guard(this: &Self) -> &TagGuard { &this.tag_guard }
+pub struct RawGuard<B: BufferRef> {
+    raw: ManuallyDrop<<B::Strategy as Strategy>::RawGuard>,
+    keep_alive: Pin<B::Strong>,
+}
 
-    pub unsafe fn map_tag_guard<NewTagGuard>(
-        this: Self,
-        f: impl FnOnce(TagGuard) -> NewTagGuard,
-    ) -> RawReaderGuard<'a, T, NewTagGuard> {
-        RawReaderGuard {
-            value: this.value,
-            tag_guard: f(this.tag_guard),
+impl<B: BufferRef> Drop for RawGuard<B> {
+    fn drop(&mut self) { unsafe { self.keep_alive.strategy.end_guard(ManuallyDrop::take(&mut self.raw)) } }
+}
+
+struct Buffers<B>(UnsafeCell<[B; 2]>);
+
+unsafe impl<B: Send> Send for Buffers<B> {}
+unsafe impl<B: Sync> Sync for Buffers<B> {}
+
+impl<B> Buffers<B> {
+    fn get_raw(&self, item: bool) -> *mut B { unsafe { self.0.get().cast::<B>().offset(isize::from(item)) } }
+    fn read_buffer(&self, item: bool) -> *mut B { self.get_raw(item) }
+    fn write_buffer(&self, item: bool) -> *mut B { self.get_raw(!item) }
+}
+
+pub struct BufferData<R, B, S, E: ?Sized> {
+    _pin: PhantomPinned,
+    which: R,
+    buffers: Buffers<B>,
+    strategy: S,
+    extra: E,
+}
+
+pub struct Swap<'a, B: BufferRef> {
+    strategy: &'a B::Strategy,
+    capture: Capture<B>,
+}
+
+#[non_exhaustive]
+pub struct SplitSwap<'a, B: BufferRef> {
+    pub swap: Swap<'a, B>,
+    pub read: &'a B::Buffer,
+    pub write: &'a B::Buffer,
+    pub extra: &'a B::Extra,
+}
+
+#[non_exhaustive]
+pub struct Split<'a, B: BufferRef> {
+    pub read: &'a B::Buffer,
+    pub write: &'a B::Buffer,
+    pub extra: &'a B::Extra,
+}
+
+impl<'a, B: BufferRef> Copy for Split<'a, B> {}
+impl<'a, B: BufferRef> Clone for Split<'a, B> {
+    fn clone(&self) -> Self { *self }
+}
+
+pub fn new<B: BufferRef>(buffer_ref: B) -> (Reader<B>, Writer<B>) {
+    let (writer, reader) = buffer_ref.split();
+    let writer = unsafe { Pin::into_inner_unchecked(writer) };
+    writer.which.store(false, Ordering::Release);
+    let tag = writer.strategy.create_tag();
+    (Reader { inner: reader, tag }, Writer { inner: writer })
+}
+
+impl<R, B: Default, S, E: Default> Default for BufferData<R, B, S, E>
+where
+    R: TrustedRadium<Item = bool>,
+    B: Default,
+    S: Default + Strategy,
+    E: Default,
+{
+    #[inline]
+    fn default() -> Self { Self::with_extra(Default::default(), Default::default(), Default::default()) }
+}
+
+impl<R, B, S> BufferData<R, B, S, ()>
+where
+    R: TrustedRadium<Item = bool>,
+    S: Default + Strategy,
+{
+    #[inline]
+    pub fn new(front: B, back: B) -> Self { Self::with_extra(front, back, ()) }
+}
+
+impl<R, B, S, E> BufferData<R, B, S, E>
+where
+    R: TrustedRadium<Item = bool>,
+    S: Default + Strategy,
+{
+    #[inline]
+    pub fn with_extra(front: B, back: B, extra: E) -> Self {
+        Self {
+            _pin: PhantomPinned,
+            buffers: Buffers(UnsafeCell::new([front, back])),
+            which: R::new(false),
+            strategy: S::default(),
+            extra,
+        }
+    }
+}
+
+impl<R, B, S, E: ?Sized> BufferData<R, B, S, E>
+where
+    R: TrustedRadium<Item = bool>,
+    S: Default + Strategy,
+{
+    pub fn extra(&self) -> &E { &self.extra }
+
+    pub fn strategy(&self) -> &S { &self.strategy }
+
+    pub fn split_mut(self: Pin<&mut Self>) -> (Reader<Pin<&mut Self>>, Writer<Pin<&mut Self>>) { new(self) }
+}
+
+impl<B: BufferRef> Swap<'_, B> {
+    fn swap_completed(&mut self) -> bool {
+        if self.strategy.is_capture_complete(&mut self.capture) {
+            self.strategy.fence();
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl<B: BufferRef> Writer<B> {
+    #[inline]
+    pub fn reader(&self) -> Reader<B> {
+        let tag = self.inner.strategy.create_tag();
+        Reader {
+            tag,
+            inner: unsafe { B::downgrade(&self.inner) },
         }
     }
 
     #[inline]
-    pub fn map<F, U: ?Sized>(this: Self, f: F) -> RawReaderGuard<'a, U, TagGuard>
-    where
-        F: for<'val> FnOnce(&'val T, &TagGuard) -> &'val U,
-    {
-        RawReaderGuard {
-            value: f(this.value, Self::tag_guard(&this)),
-            tag_guard: this.tag_guard,
+    pub fn read(&self) -> &B::Buffer {
+        unsafe {
+            let which = self.inner.which.load_unchecked();
+            let read_buffer = self.inner.buffers.read_buffer(which);
+            &*read_buffer
         }
     }
 
     #[inline]
-    pub fn try_map<F, U: ?Sized>(this: Self, f: F) -> Result<RawReaderGuard<'a, U, TagGuard>, Self>
+    pub fn extra(&self) -> &B::Extra { &self.inner.extra }
+
+    #[inline]
+    pub fn split(&mut self) -> (&B::Buffer, &mut B::Buffer, &B::Extra) {
+        unsafe {
+            let inner = &*self.inner;
+            let which = inner.which.load_unchecked();
+            let reader = inner.buffers.read_buffer(which);
+            let writer = inner.buffers.write_buffer(which);
+            (&*reader, &mut *writer, &inner.extra)
+        }
+    }
+
+    pub fn swap_buffers(this: &mut Self) {
+        let mut swap = unsafe { Self::start_buffer_swap(this) };
+
+        while !swap.swap_completed() {}
+    }
+
+    pub fn swap_buffers_with<F: FnMut(Split<'_, B>)>(this: &mut Self, mut f: F) {
+        let SplitSwap {
+            mut swap,
+            read,
+            write,
+            extra,
+        } = unsafe { Self::split_start_buffer_swap(this) };
+
+        while !swap.swap_completed() {
+            f(Split { read, write, extra })
+        }
+    }
+
+    pub unsafe fn start_buffer_swap(this: &mut Self) -> Swap<'_, B> { Self::split_start_buffer_swap(this).swap }
+
+    pub unsafe fn split_start_buffer_swap(this: &mut Self) -> SplitSwap<'_, B> {
+        let inner = &*this.inner;
+        inner.strategy.fence();
+
+        // `fetch_not` == `fetch_xor(true)`
+        let which = inner.which.fetch_xor(true, Ordering::Release);
+        let which = !which;
+
+        let capture = inner.strategy.capture_readers();
+        let read = inner.buffers.read_buffer(which);
+        let write = inner.buffers.write_buffer(which);
+        let extra = &inner.extra;
+
+        SplitSwap {
+            swap: Swap {
+                strategy: &inner.strategy,
+                capture,
+            },
+            read: &*read,
+            write: &*write,
+            extra,
+        }
+    }
+
+    #[inline]
+    pub fn get_pinned_write_buffer(this: Pin<&mut Self>) -> Pin<&mut B::Buffer> {
+        unsafe { Pin::new_unchecked(Pin::into_inner_unchecked(this) as &mut B::Buffer) }
+    }
+}
+
+impl<B: BufferRef> Reader<B> {
+    #[inline]
+    pub fn try_clone(&self) -> Result<Self, B::UpgradeError> {
+        let inner = B::upgrade(&self.inner)?;
+        let tag = inner.strategy.create_tag();
+        Ok(Reader {
+            inner: self.inner.clone(),
+            tag,
+        })
+    }
+
+    #[inline]
+    pub fn is_dangling(&self) -> bool { B::is_dangling(&self.inner) }
+}
+
+impl<B: BufferRef> Reader<B> {
+    #[inline]
+    pub fn get(&mut self) -> ReaderGuard<'_, B> { self.try_get().expect("Tried to reader from a dangling `Reader<B>`") }
+
+    #[inline]
+    pub fn try_get(&mut self) -> Result<ReaderGuard<'_, B>, B::UpgradeError> {
+        let inner = B::upgrade(&self.inner)?;
+        let guard = inner.strategy.begin_guard(&self.tag);
+
+        let which = inner.which.load(Ordering::Acquire);
+        let buffer = inner.buffers.read_buffer(which);
+
+        Ok(ReaderGuard {
+            value: unsafe { &*buffer },
+            raw: RawGuard {
+                raw: ManuallyDrop::new(guard),
+                keep_alive: inner,
+            },
+        })
+    }
+}
+
+impl<'a, B: BufferRef, T: ?Sized> ReaderGuard<'a, B, T> {
+    pub fn raw_guard(this: &Self) -> &RawGuard<B> { &this.raw }
+
+    #[inline]
+    pub fn map<F, U: ?Sized>(this: Self, f: F) -> ReaderGuard<'a, B, U>
     where
-        F: for<'val> FnOnce(&'val T, &TagGuard) -> Option<&'val U>,
+        F: for<'val> FnOnce(&'val T, &RawGuard<B>) -> &'val U,
     {
-        match f(this.value, Self::tag_guard(&this)) {
+        ReaderGuard {
+            value: f(this.value, Self::raw_guard(&this)),
+            raw: this.raw,
+        }
+    }
+
+    #[inline]
+    pub fn try_map<F, U: ?Sized>(this: Self, f: F) -> Result<ReaderGuard<'a, B, U>, Self>
+    where
+        F: for<'val> FnOnce(&'val T, &RawGuard<B>) -> Option<&'val U>,
+    {
+        match f(this.value, Self::raw_guard(&this)) {
             None => Err(this),
-            Some(value) => Ok(RawReaderGuard {
-                value,
-                tag_guard: this.tag_guard,
-            }),
+            Some(value) => Ok(ReaderGuard { value, raw: this.raw }),
         }
     }
 
     #[inline]
-    pub fn try_map_res<F, U: ?Sized, E>(this: Self, f: F) -> Result<RawReaderGuard<'a, U, TagGuard>, (Self, E)>
+    pub fn try_map_res<F, U: ?Sized, E>(this: Self, f: F) -> Result<ReaderGuard<'a, B, U>, (Self, E)>
     where
-        F: for<'val> FnOnce(&'val T, &TagGuard) -> Result<&'val U, E>,
+        F: for<'val> FnOnce(&'val T, &RawGuard<B>) -> Result<&'val U, E>,
     {
-        match f(this.value, Self::tag_guard(&this)) {
+        match f(this.value, Self::raw_guard(&this)) {
             Err(e) => Err((this, e)),
-            Ok(value) => Ok(RawReaderGuard {
-                value,
-                tag_guard: this.tag_guard,
-            }),
+            Ok(value) => Ok(ReaderGuard { value, raw: this.raw }),
         }
     }
 }
 
-impl<T: ?Sized, TagGuard> core::ops::Deref for RawReaderGuard<'_, T, TagGuard> {
+impl<B: BufferRef> Deref for Writer<B> {
+    type Target = B::Buffer;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        unsafe {
+            let inner = &*self.inner;
+            let which = inner.which.load_unchecked();
+            let write = inner.buffers.write_buffer(which);
+            &*write
+        }
+    }
+}
+
+impl<B: BufferRef> DerefMut for Writer<B> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe {
+            let inner = &*self.inner;
+            let which = inner.which.load_unchecked();
+            let write = inner.buffers.write_buffer(which);
+            &mut *write
+        }
+    }
+}
+
+impl<T: ?Sized, B: BufferRef> core::ops::Deref for ReaderGuard<'_, B, T> {
     type Target = T;
 
     #[inline]
