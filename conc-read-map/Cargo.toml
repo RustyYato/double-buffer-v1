@@ -8,7 +8,6 @@ edition = "2018"
 
 [features]
 
-nightly = ['double-buffer/nightly']
-
 [dependencies]
 double-buffer = { path = '../double-buffer' }
+sync_wrapper = '0.1'

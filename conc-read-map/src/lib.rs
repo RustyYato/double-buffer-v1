@@ -1,5 +1,8 @@
-use std::borrow::Cow;
+#![forbid(unsafe_code)]
 
+use std::{borrow::Cow, sync::Arc};
+
+use sync_wrapper::SyncWrapper;
 extern crate double_buffer as db;
 
 mod raw_map;
@@ -38,11 +41,11 @@ pub trait RawMapAccess<Q: ?Sized>: RawMap {
 }
 
 pub struct Write<'env, M, K, V> {
-    map: db::op::Writer<M, MapOps<'env, M, K, V>>,
+    map: db::op::Writer<db::sync::park::owned::BufferRef<M>, MapOps<'env, M, K, V>>,
 }
 
 pub struct Read<M> {
-    map: db::blocking::Reader<M>,
+    map: db::sync::park::owned::Reader<M>,
 }
 
 pub enum MapOps<'env, M, K, V> {
@@ -64,7 +67,8 @@ impl<M> Clone for Read<M> {
 pub type WriteMap<'env, M> = Write<'env, M, <M as RawMap>::Key, <M as RawMap>::Value>;
 pub fn new<'env, M: RawMap>() -> (Read<M>, WriteMap<'env, M>) {
     let (a, b) = M::new();
-    let (r, w) = db::op::new_op_writer_with(a, b);
+    let (r, w) = db::new(Arc::pin(db::BufferData::new(a, b)));
+    let w = db::op::Writer::from(w);
 
     (Read { map: r }, Write { map: w })
 }
@@ -80,24 +84,22 @@ where
             MapOps::Remove(key) => map.remove(key),
             MapOps::Clear => map.clear(),
             &mut MapOps::Reserve(additional) => map.reserve(additional),
-            MapOps::Call(Call(call)) => call(map, Order::First),
+            MapOps::Call(Call(ref mut call)) => call.get_mut()(map, Order::First),
         }
     }
 
-    fn into_apply(self, map: &mut M) {
+    fn apply_once(self, map: &mut M) {
         match self {
             MapOps::Insert(key, value) => map.insert(key, value),
             MapOps::Remove(key) => map.remove(&key),
             MapOps::Clear => map.clear(),
             MapOps::Reserve(additional) => map.reserve(additional),
-            MapOps::Call(Call(mut call)) => call(map, Order::Second),
+            MapOps::Call(Call(mut call)) => call.get_mut()(map, Order::Second),
         }
     }
 }
 
-pub struct Call<'env, M>(Box<dyn 'env + FnMut(&mut M, Order) + Send>);
-unsafe impl<T: Send> Send for Call<'_, T> {}
-unsafe impl<T: Send> Sync for Call<'_, T> {}
+pub struct Call<'env, M>(SyncWrapper<Box<dyn 'env + FnMut(&mut M, Order) + Send>>);
 
 #[repr(u8)]
 #[derive(Clone, Copy)]
@@ -158,21 +160,22 @@ where
         F: 'env + Send + FnMut(&M::Key, &mut M::Value, Order) -> bool,
         M: RawMapRetain,
     {
-        self.map.apply(MapOps::Call(Call(Box::new(move |map, order| {
-            map.retain(|key, value| f(key, value, order))
-        }))))
+        self.map
+            .apply(MapOps::Call(Call(SyncWrapper::new(Box::new(move |map, order| {
+                map.retain(|key, value| f(key, value, order))
+            })))))
     }
 }
 
 impl<M> Read<M> {
-    pub fn get_map(&mut self) -> db::blocking::ReaderGuard<'_, M> { self.map.get() }
+    pub fn get_map(&mut self) -> db::sync::park::owned::ReaderGuard<'_, M> { self.map.get() }
 
-    pub fn get<Q>(&mut self, key: &Q) -> Option<db::blocking::ReaderGuard<'_, M, M::Value>>
+    pub fn get<Q>(&mut self, key: &Q) -> Option<db::sync::park::owned::ReaderGuard<'_, M, M::Value>>
     where
         Q: ?Sized,
         M: RawMapAccess<Q>,
     {
-        db::blocking::ReaderGuard::try_map(self.get_map(), move |x, _| x.get(key)).ok()
+        db::ReaderGuard::try_map(self.get_map(), move |x, _| x.get(key)).ok()
     }
 }
 
