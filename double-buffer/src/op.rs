@@ -31,11 +31,11 @@ impl<B: BufferRef, O> From<crate::Writer<B>> for Writer<B, O> {
 }
 
 impl<B: BufferRef, O> Writer<B, O> {
-    pub fn reader(&self) -> crate::Reader<B> { self.writer.reader() }
+    pub fn reader(&self) -> crate::Reader<B> { crate::Writer::reader(&self.writer) }
 
-    pub fn read(&self) -> &B::Buffer { self.writer.read() }
+    pub fn read(&self) -> &B::Buffer { crate::Writer::read(&self.writer) }
 
-    pub fn extra(&self) -> &B::Extra { self.writer.extra() }
+    pub fn extra(&self) -> &B::Extra { crate::Writer::extra(&self.writer) }
 
     #[inline]
     fn as_ref(&mut self) -> WriterRef<'_, B, O> {
@@ -49,14 +49,14 @@ impl<B: BufferRef, O> Writer<B, O> {
 impl<B: BufferRef, O: Operation<B::Buffer>> Writer<B, O> {
     #[inline]
     pub fn split(&mut self) -> (&B::Buffer, WriterRef<'_, B, O>, &B::Extra) {
-        let (reader, writer, extra) = self.writer.split();
+        let split = crate::Writer::split_mut(&mut self.writer);
         (
-            reader,
+            split.read,
             WriterRef {
-                buffer: writer,
+                buffer: split.write,
                 ops: &mut self.ops,
             },
-            extra,
+            split.extra,
         )
     }
 

@@ -34,7 +34,7 @@ where
 
     fn upgrade(weak: &Self::Weak) -> Result<Pin<Self::Strong>, Self::UpgradeError> { Ok(*weak) }
 
-    unsafe fn downgrade(strong: &Self::Strong) -> Self::Weak { Pin::new_unchecked(*strong) }
+    fn downgrade(strong: &Pin<Self::Strong>) -> Self::Weak { *strong }
 }
 
 #[derive(Debug)]
@@ -79,7 +79,10 @@ where
         Ok(unsafe { Pin::new_unchecked(weak.0.upgrade().ok_or(UpgradeFailed)?) })
     }
 
-    unsafe fn downgrade(strong: &Self::Strong) -> Self::Weak { PinnedRcWeak(Rc::downgrade(strong)) }
+    fn downgrade(strong: &Pin<Self::Strong>) -> Self::Weak {
+        let strong = unsafe { core::mem::transmute::<&Pin<Self::Strong>, &Self::Strong>(strong) };
+        PinnedRcWeak(Rc::downgrade(strong))
+    }
 }
 
 #[cfg(feature = "alloc")]
@@ -110,7 +113,7 @@ where
 
     fn upgrade(weak: &Self::Weak) -> Result<Pin<Self::Strong>, Self::UpgradeError> { Ok(Pin::clone(weak)) }
 
-    unsafe fn downgrade(strong: &Self::Strong) -> Self::Weak { Pin::new_unchecked(strong.clone()) }
+    fn downgrade(strong: &Pin<Self::Strong>) -> Self::Weak { strong.clone() }
 }
 
 #[cfg(feature = "alloc")]
@@ -151,5 +154,8 @@ where
         Ok(unsafe { Pin::new_unchecked(weak.0.upgrade().ok_or(UpgradeFailed)?) })
     }
 
-    unsafe fn downgrade(strong: &Self::Strong) -> Self::Weak { PinnedArcWeak(Arc::downgrade(strong)) }
+    fn downgrade(strong: &Pin<Self::Strong>) -> Self::Weak {
+        let strong = unsafe { core::mem::transmute::<&Pin<Self::Strong>, &Self::Strong>(strong) };
+        PinnedArcWeak(Arc::downgrade(strong))
+    }
 }

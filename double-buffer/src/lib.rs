@@ -84,7 +84,7 @@ pub unsafe trait BufferRef: Sized {
 
     fn upgrade(weak: &Self::Weak) -> Result<Pin<Self::Strong>, Self::UpgradeError>;
 
-    unsafe fn downgrade(strong: &Self::Strong) -> Self::Weak;
+    fn downgrade(strong: &Pin<Self::Strong>) -> Self::Weak;
 }
 
 pub unsafe trait Strategy: Sized {
@@ -108,7 +108,7 @@ pub unsafe trait Strategy: Sized {
 // pub unsafe trait Capture: Strategy {}
 
 pub struct Writer<B: BufferRef> {
-    inner: B::Strong,
+    inner: Pin<B::Strong>,
 }
 
 pub struct Reader<B: BufferRef> {
@@ -155,10 +155,9 @@ pub struct Swap<'a, B: BufferRef> {
 }
 
 #[non_exhaustive]
-pub struct SplitSwap<'a, B: BufferRef> {
-    pub swap: Swap<'a, B>,
+pub struct SplitMut<'a, B: BufferRef> {
     pub read: &'a B::Buffer,
-    pub write: &'a B::Buffer,
+    pub write: &'a mut B::Buffer,
     pub extra: &'a B::Extra,
 }
 
@@ -176,7 +175,6 @@ impl<'a, B: BufferRef> Clone for Split<'a, B> {
 
 pub fn new<B: BufferRef>(buffer_ref: B) -> (Reader<B>, Writer<B>) {
     let (writer, reader) = buffer_ref.split();
-    let writer = unsafe { Pin::into_inner_unchecked(writer) };
     writer.which.store(false, Ordering::Release);
     let tag = writer.strategy.create_tag();
     (Reader { inner: reader, tag }, Writer { inner: writer })
@@ -244,34 +242,58 @@ impl<B: BufferRef> Swap<'_, B> {
 
 impl<B: BufferRef> Writer<B> {
     #[inline]
-    pub fn reader(&self) -> Reader<B> {
-        let tag = self.inner.strategy.create_tag();
+    pub fn reader(this: &Self) -> Reader<B> {
+        let tag = this.inner.strategy.create_tag();
         Reader {
             tag,
-            inner: unsafe { B::downgrade(&self.inner) },
+            inner: B::downgrade(&this.inner),
         }
     }
 
     #[inline]
-    pub fn read(&self) -> &B::Buffer {
+    pub fn read(this: &Self) -> &B::Buffer {
         unsafe {
-            let which = self.inner.which.load_unchecked();
-            let read_buffer = self.inner.buffers.read_buffer(which);
+            let which = this.inner.which.load_unchecked();
+            let read_buffer = this.inner.buffers.read_buffer(which);
             &*read_buffer
         }
     }
 
     #[inline]
-    pub fn extra(&self) -> &B::Extra { &self.inner.extra }
+    pub fn strategy(this: &Self) -> &B::Strategy { &this.inner.strategy }
 
     #[inline]
-    pub fn split(&mut self) -> (&B::Buffer, &mut B::Buffer, &B::Extra) {
+    pub fn extra(this: &Self) -> &B::Extra { &this.inner.extra }
+
+    #[inline]
+    pub fn split(this: &Self) -> Split<'_, B> {
         unsafe {
-            let inner = &*self.inner;
+            let inner = &*this.inner;
             let which = inner.which.load_unchecked();
             let reader = inner.buffers.read_buffer(which);
             let writer = inner.buffers.write_buffer(which);
-            (&*reader, &mut *writer, &inner.extra)
+
+            Split {
+                read: &*reader,
+                write: &*writer,
+                extra: &inner.extra,
+            }
+        }
+    }
+
+    #[inline]
+    pub fn split_mut(this: &mut Self) -> SplitMut<'_, B> {
+        unsafe {
+            let inner = &*this.inner;
+            let which = inner.which.load_unchecked();
+            let reader = inner.buffers.read_buffer(which);
+            let writer = inner.buffers.write_buffer(which);
+
+            SplitMut {
+                read: &*reader,
+                write: &mut *writer,
+                extra: &inner.extra,
+            }
         }
     }
 
@@ -282,21 +304,16 @@ impl<B: BufferRef> Writer<B> {
     }
 
     pub fn swap_buffers_with<F: FnMut(Split<'_, B>)>(this: &mut Self, mut f: F) {
-        let SplitSwap {
-            mut swap,
-            read,
-            write,
-            extra,
-        } = unsafe { Self::split_start_buffer_swap(this) };
+        let (mut swap, split) = unsafe { Self::split_start_buffer_swap(this) };
 
         while !swap.swap_completed() {
-            f(Split { read, write, extra })
+            f(split)
         }
     }
 
-    pub unsafe fn start_buffer_swap(this: &mut Self) -> Swap<'_, B> { Self::split_start_buffer_swap(this).swap }
+    pub unsafe fn start_buffer_swap(this: &mut Self) -> Swap<'_, B> { Self::split_start_buffer_swap(this).0 }
 
-    pub unsafe fn split_start_buffer_swap(this: &mut Self) -> SplitSwap<'_, B> {
+    pub unsafe fn split_start_buffer_swap(this: &mut Self) -> (Swap<'_, B>, Split<'_, B>) {
         let inner = &*this.inner;
         inner.strategy.fence();
 
@@ -309,15 +326,17 @@ impl<B: BufferRef> Writer<B> {
         let write = inner.buffers.write_buffer(which);
         let extra = &inner.extra;
 
-        SplitSwap {
-            swap: Swap {
+        (
+            Swap {
                 strategy: &inner.strategy,
                 capture,
             },
-            read: &*read,
-            write: &*write,
-            extra,
-        }
+            Split {
+                read: &*read,
+                write: &*write,
+                extra,
+            },
+        )
     }
 
     #[inline]
@@ -339,9 +358,7 @@ impl<B: BufferRef> Reader<B> {
 
     #[inline]
     pub fn is_dangling(&self) -> bool { B::is_dangling(&self.inner) }
-}
 
-impl<B: BufferRef> Reader<B> {
     #[inline]
     pub fn get(&mut self) -> ReaderGuard<'_, B> { self.try_get().expect("Tried to reader from a dangling `Reader<B>`") }
 
@@ -398,6 +415,14 @@ impl<'a, B: BufferRef, T: ?Sized> ReaderGuard<'a, B, T> {
             Ok(value) => Ok(ReaderGuard { value, raw: this.raw }),
         }
     }
+}
+
+impl<'a, B: BufferRef> RawGuard<B> {
+    #[inline]
+    pub fn strategy(&self) -> &B::Strategy { &self.keep_alive.strategy }
+
+    #[inline]
+    pub fn extra(&self) -> &B::Extra { &self.keep_alive.extra }
 }
 
 impl<B: BufferRef> Deref for Writer<B> {
