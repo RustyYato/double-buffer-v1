@@ -229,7 +229,22 @@ where
     pub fn split_mut(self: Pin<&mut Self>) -> (Reader<Pin<&mut Self>>, Writer<Pin<&mut Self>>) { new(self) }
 }
 
+struct FinishSwapOnDrop<'a, B: BufferRef> {
+    swap: Swap<'a, B>,
+    backoff: crossbeam_utils::Backoff,
+}
+
+impl<B: BufferRef> Drop for FinishSwapOnDrop<'_, B> {
+    #[inline]
+    fn drop(&mut self) {
+        while !self.swap.is_swap_completed() {
+            self.backoff.snooze()
+        }
+    }
+}
+
 impl<B: BufferRef> Swap<'_, B> {
+    #[inline]
     pub fn is_swap_completed(&mut self) -> bool {
         if self.strategy.is_capture_complete(&mut self.capture) {
             self.strategy.fence();
@@ -238,14 +253,42 @@ impl<B: BufferRef> Swap<'_, B> {
             false
         }
     }
-}
 
-struct FinishSwapOnDrop<'a, B: BufferRef> {
-    swap: Swap<'a, B>,
-}
+    pub fn finish_swap(self) {
+        let mut on_drop = FinishSwapOnDrop {
+            swap: self,
+            backoff: crossbeam_utils::Backoff::new(),
+        };
+        let FinishSwapOnDrop { swap, backoff } = &mut on_drop;
 
-impl<B: BufferRef> Drop for FinishSwapOnDrop<'_, B> {
-    fn drop(&mut self) { while !self.swap.is_swap_completed() {} }
+        while !swap.is_swap_completed() {
+            backoff.snooze()
+        }
+
+        core::mem::forget(on_drop);
+    }
+
+    pub fn finish_swap_with<F: FnMut()>(self, ref mut f: F) {
+        #[cold]
+        #[inline(never)]
+        fn cold(f: &mut dyn FnMut()) { f() }
+
+        fn finish_swap_with<B: BufferRef>(swap: Swap<B>, f: &mut dyn FnMut()) {
+            let mut on_drop = FinishSwapOnDrop {
+                swap,
+                backoff: crossbeam_utils::Backoff::new(),
+            };
+            let swap = &mut on_drop.swap;
+
+            while !swap.is_swap_completed() {
+                cold(f)
+            }
+
+            core::mem::forget(on_drop)
+        }
+
+        finish_swap_with(self, f)
+    }
 }
 
 impl<B: BufferRef> Writer<B> {
@@ -305,30 +348,25 @@ impl<B: BufferRef> Writer<B> {
         }
     }
 
-    pub fn swap_buffers(this: &mut Self) {
-        let swap = unsafe { Self::start_buffer_swap(this) };
-        let mut on_drop = FinishSwapOnDrop { swap };
-        let swap = &mut on_drop.swap;
+    pub fn swap_buffers(this: &mut Self) { unsafe { Self::start_buffer_swap(this).finish_swap() } }
 
-        while !swap.is_swap_completed() {}
-
-        core::mem::forget(on_drop);
-    }
-
-    pub fn swap_buffers_with<F: FnMut(Split<'_, B>)>(this: &mut Self, mut f: F) {
-        let (swap, split) = unsafe { Self::split_start_buffer_swap(this) };
-        let mut on_drop = FinishSwapOnDrop { swap };
-        let swap = &mut on_drop.swap;
-
-        while !swap.is_swap_completed() {
-            f(split)
+    pub fn swap_buffers_with<F: FnMut(Split<'_, B>)>(this: &mut Self, f: F) {
+        fn bake<'a, B: 'a + BufferRef, F: 'a + FnMut(Split<'a, B>)>(
+            split: Split<'a, B>,
+            mut f: F,
+        ) -> impl '_ + FnMut() {
+            move || f(split)
         }
 
-        core::mem::forget(on_drop);
+        let (swap, split) = unsafe { Self::split_start_buffer_swap(this) };
+
+        swap.finish_swap_with(bake(split, f))
     }
 
+    #[inline]
     pub unsafe fn start_buffer_swap(this: &mut Self) -> Swap<'_, B> { Self::split_start_buffer_swap(this).0 }
 
+    #[inline]
     pub unsafe fn split_start_buffer_swap(this: &mut Self) -> (Swap<'_, B>, Split<'_, B>) {
         let inner = &*this.inner;
         inner.strategy.fence();
@@ -397,9 +435,9 @@ impl<B: BufferRef> Reader<B> {
 }
 
 impl<'a, B: BufferRef, T: ?Sized> ReaderGuard<'a, B, T> {
+    #[inline]
     pub fn raw_guard(this: &Self) -> &RawGuard<B> { &this.raw }
 
-    #[inline]
     pub fn map<F, U: ?Sized>(this: Self, f: F) -> ReaderGuard<'a, B, U>
     where
         F: for<'val> FnOnce(&'val T, &RawGuard<B>) -> &'val U,
@@ -410,7 +448,6 @@ impl<'a, B: BufferRef, T: ?Sized> ReaderGuard<'a, B, T> {
         }
     }
 
-    #[inline]
     pub fn try_map<F, U: ?Sized>(this: Self, f: F) -> Result<ReaderGuard<'a, B, U>, Self>
     where
         F: for<'val> FnOnce(&'val T, &RawGuard<B>) -> Option<&'val U>,
@@ -421,7 +458,6 @@ impl<'a, B: BufferRef, T: ?Sized> ReaderGuard<'a, B, T> {
         }
     }
 
-    #[inline]
     pub fn try_map_res<F, U: ?Sized, E>(this: Self, f: F) -> Result<ReaderGuard<'a, B, U>, (Self, E)>
     where
         F: for<'val> FnOnce(&'val T, &RawGuard<B>) -> Result<&'val U, E>,
