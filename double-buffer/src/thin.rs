@@ -8,104 +8,105 @@ pub type SyncThin<T> = Thin<T, core::sync::atomic::AtomicUsize>;
 pub type LocalThinInner<T> = ThinInner<T, core::cell::Cell<usize>>;
 pub type SyncThinInner<T> = ThinInner<T, core::sync::atomic::AtomicUsize>;
 
-pub struct Thin<T: ?Sized, W: TrustedRadium<Item = usize>> {
-    ptr: *mut ThinInner<T, W>,
+pub struct Thin<T: ?Sized, S: TrustedRadium<Item = usize>> {
+    ptr: *mut ThinInner<T, S>,
 }
 
-unsafe impl<T: ?Sized + Send + Sync, W: Send + Sync + TrustedRadium<Item = usize>> Send for Thin<T, W> {}
-unsafe impl<T: ?Sized + Send + Sync, W: Send + Sync + TrustedRadium<Item = usize>> Sync for Thin<T, W> {}
+unsafe impl<T: ?Sized + Send + Sync, S: Send + Sync + TrustedRadium<Item = usize>> Send for Thin<T, S> {}
+unsafe impl<T: ?Sized + Send + Sync, S: Send + Sync + TrustedRadium<Item = usize>> Sync for Thin<T, S> {}
 
-pub struct ThinInner<T: ?Sized, W> {
-    strong: W,
+pub struct ThinInner<T: ?Sized, S> {
+    strong: S,
     value: T,
 }
 
-impl<T, W: TrustedRadium<Item = usize>> ThinInner<T, W> {
+impl<T, S: TrustedRadium<Item = usize>> ThinInner<T, S> {
     pub fn new(value: T) -> Self {
         Self {
-            strong: W::new(1),
+            strong: S::new(1),
             value,
         }
     }
 }
 
-impl<T, W: TrustedRadium<Item = usize>> From<ThinInner<T, W>> for Thin<T, W> {
-    fn from(inner: ThinInner<T, W>) -> Self { Self::from(Box::new(inner)) }
+impl<T, S: TrustedRadium<Item = usize>> From<ThinInner<T, S>> for Thin<T, S> {
+    fn from(inner: ThinInner<T, S>) -> Self { Self::from(Box::new(inner)) }
 }
 
-impl<T: ?Sized, W: TrustedRadium<Item = usize>> From<Box<ThinInner<T, W>>> for Thin<T, W> {
-    fn from(bx: Box<ThinInner<T, W>>) -> Self { Self { ptr: Box::into_raw(bx) } }
+impl<T: ?Sized, S: TrustedRadium<Item = usize>> From<Box<ThinInner<T, S>>> for Thin<T, S> {
+    fn from(bx: Box<ThinInner<T, S>>) -> Self { Self { ptr: Box::into_raw(bx) } }
 }
 
-impl<T: ?Sized, W: TrustedRadium<Item = usize>> From<Pin<Box<ThinInner<T, W>>>> for Pin<Thin<T, W>> {
-    fn from(bx: Pin<Box<ThinInner<T, W>>>) -> Self {
+impl<T: ?Sized, S: TrustedRadium<Item = usize>> From<Pin<Box<ThinInner<T, S>>>> for Pin<Thin<T, S>> {
+    fn from(bx: Pin<Box<ThinInner<T, S>>>) -> Self {
         unsafe { Pin::new_unchecked(Pin::into_inner_unchecked(bx).into()) }
     }
 }
 
-impl<T, W: TrustedRadium<Item = usize>> Thin<T, W> {
+impl<T, S: TrustedRadium<Item = usize>> Thin<T, S> {
     pub fn new(value: T) -> Self { Box::new(ThinInner::new(value)).into() }
     pub fn pin(value: T) -> Pin<Self> { Box::pin(ThinInner::new(value)).into() }
 }
 
-impl<T: ?Sized, W: TrustedRadium<Item = usize>> Thin<T, W> {
+impl<T: ?Sized, S: TrustedRadium<Item = usize>> Thin<T, S> {
     pub fn strong_count(this: &Self) -> usize { unsafe { (*this.ptr).strong.load(Ordering::Acquire) } }
+
+    fn strong(&self) -> &S { unsafe { &(*self.ptr).strong } }
 }
 
-impl<T: ?Sized, W: TrustedRadium<Item = usize>> core::ops::Deref for Thin<T, W> {
+impl<T: ?Sized, S: TrustedRadium<Item = usize>> core::ops::Deref for Thin<T, S> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target { unsafe { &(*self.ptr).value } }
 }
 
 use std::fmt;
-impl<T: ?Sized + fmt::Debug, W: TrustedRadium<Item = usize>> fmt::Debug for Thin<T, W> {
+impl<T: ?Sized + fmt::Debug, S: TrustedRadium<Item = usize>> fmt::Debug for Thin<T, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { T::fmt(self, f) }
 }
 
-impl<T: ?Sized, W: TrustedRadium<Item = usize>> Clone for Thin<T, W> {
+impl<T: ?Sized, S: TrustedRadium<Item = usize>> Clone for Thin<T, S> {
     fn clone(&self) -> Self {
         #[cold]
         #[inline(never)]
-        fn clone_fail() -> ! { panic!("Tried to clone `Thin<T, W>` too many times") }
+        fn clone_fail() -> ! {
+            struct Abort;
 
-        unsafe {
-            use crossbeam_utils::Backoff;
-
-            let strong = &(*self.ptr).strong;
-            let mut value = strong.load(Ordering::Acquire);
-
-            let backoff = Backoff::new();
-
-            loop {
-                if let Some(next_value) = value.checked_add(1) {
-                    if let Err(current) =
-                        strong.compare_exchange_weak(value, next_value, Ordering::Acquire, Ordering::Acquire)
-                    {
-                        value = current;
-                    } else {
-                        break
-                    }
-                } else {
-                    clone_fail()
-                }
-
-                crate::snooze(&backoff)
+            impl Drop for Abort {
+                fn drop(&mut self) { panic!() }
             }
+
+            // double panic = abort
+            let _abort = Abort;
+
+            panic!("Tried to increment ref-count too many times!")
+        }
+
+        let old_size = self.strong().fetch_add(1, Ordering::Relaxed);
+
+        if old_size > isize::MAX as usize {
+            clone_fail()
         }
 
         Self { ptr: self.ptr }
     }
 }
 
-impl<T: ?Sized, W: TrustedRadium<Item = usize>> Drop for Thin<T, W> {
+impl<T: ?Sized, S: TrustedRadium<Item = usize>> Drop for Thin<T, S> {
     fn drop(&mut self) {
         unsafe {
-            let count = (*self.ptr).strong.fetch_sub(1, Ordering::Release);
-
-            if count == 1 {
-                Box::from_raw(self.ptr);
+            if 1 == self.strong().fetch_sub(1, Ordering::Release) {
+                drop_slow(Box::from_raw(self.ptr))
             }
         }
     }
+}
+
+#[cold]
+#[inline(never)]
+fn drop_slow<T: ?Sized, S: TrustedRadium<Item = usize>>(inner: Box<ThinInner<T, S>>) {
+    if !S::IS_LOCAL {
+        core::sync::atomic::fence(Ordering::Acquire);
+    }
+    drop(inner);
 }
