@@ -64,26 +64,28 @@ unsafe impl Strategy for AtomicStrategy {
     }
 
     fn begin_guard(&self, _: &mut Self::ReaderTag) -> Self::RawGuard {
-        use crossbeam_utils::Backoff;
+        #[cold]
+        #[inline(never)]
+        fn begin_guard_fail() -> ! {
+            struct Abort;
 
-        let num_readers = &self.num_readers;
-        let mut value = num_readers.load(Ordering::Acquire);
-
-        let backoff = Backoff::new();
-
-        loop {
-            if let Some(next_value) = value.checked_add(1) {
-                if let Err(current) =
-                    num_readers.compare_exchange_weak(value, next_value, Ordering::Acquire, Ordering::Acquire)
-                {
-                    value = current;
-                } else {
-                    return RawGuard(())
-                }
+            impl Drop for Abort {
+                fn drop(&mut self) { panic!() }
             }
 
-            crate::snooze(&backoff)
+            // double panic = abort
+            let _abort = Abort;
+
+            panic!("Tried to create more than `isize::MAX` guards!")
         }
+
+        let num_readers = self.num_readers.fetch_add(1, Ordering::Acquire);
+
+        if num_readers > isize::MAX as usize {
+            begin_guard_fail()
+        }
+
+        RawGuard(())
     }
 
     #[inline]
