@@ -39,32 +39,39 @@ pub struct SyncStrategy {
     tag_list: Mutex<SmallVec<[Thin<AtomicU32>; 8]>>,
 }
 
-pub struct Tag(Thin<AtomicU32>);
-pub struct Capture {
-    active: SmallVec<[Thin<AtomicU32>; 8]>,
-}
-
 pub struct RawGuard {
     tag: Thin<AtomicU32>,
 }
 
+pub struct Capture {
+    active: SmallVec<[Thin<AtomicU32>; 8]>,
+}
+
+pub struct ReaderTag(Thin<AtomicU32>);
+#[derive(Clone, Copy)]
+pub struct WriterTag(());
+
 unsafe impl Strategy for SyncStrategy {
-    type ReaderTag = Tag;
+    type ReaderTag = ReaderTag;
+    type WriterTag = WriterTag;
     type Capture = Capture;
     type RawGuard = RawGuard;
 
     #[inline]
-    fn create_tag(&self) -> Self::ReaderTag {
+    unsafe fn reader_tag(&self) -> Self::ReaderTag {
         let tag = Thin::new(AtomicU32::new(0));
         self.tag_list.lock().push(tag.clone());
-        Tag(tag)
+        ReaderTag(tag)
     }
 
     #[inline]
-    fn fence(&self) { core::sync::atomic::fence(Ordering::SeqCst); }
+    unsafe fn writer_tag(&self) -> Self::WriterTag { WriterTag(()) }
 
     #[inline]
-    fn capture_readers(&self) -> Self::Capture {
+    fn fence(&self, _: Self::WriterTag) { core::sync::atomic::fence(Ordering::SeqCst); }
+
+    #[inline]
+    fn capture_readers(&self, _: Self::WriterTag) -> Self::Capture {
         let mut active = SmallVec::new();
 
         self.tag_list.lock().retain(|tag| {
@@ -81,7 +88,7 @@ unsafe impl Strategy for SyncStrategy {
     }
 
     #[inline]
-    fn is_capture_complete(&self, capture: &mut Self::Capture) -> bool {
+    fn is_capture_complete(&self, capture: &mut Self::Capture, _: Self::WriterTag) -> bool {
         capture.active.retain(|tag| tag.load(Ordering::Relaxed) & 1 == 1);
 
         capture.active.is_empty()

@@ -66,6 +66,7 @@ pub type BufferRefData<BR> = BufferData<
 >;
 
 type ReaderTag<BR> = <<BR as BufferRef>::Strategy as Strategy>::ReaderTag;
+type WriterTag<BR> = <<BR as BufferRef>::Strategy as Strategy>::WriterTag;
 type Capture<BR> = <<BR as BufferRef>::Strategy as Strategy>::Capture;
 
 pub unsafe trait BufferRef: Sized {
@@ -89,16 +90,19 @@ pub unsafe trait BufferRef: Sized {
 
 pub unsafe trait Strategy: Sized {
     type ReaderTag;
+    type WriterTag: Copy;
     type Capture;
     type RawGuard;
 
-    fn create_tag(&self) -> Self::ReaderTag;
+    unsafe fn reader_tag(&self) -> Self::ReaderTag;
 
-    fn fence(&self);
+    unsafe fn writer_tag(&self) -> Self::WriterTag;
 
-    fn capture_readers(&self) -> Self::Capture;
+    fn fence(&self, tag: Self::WriterTag);
 
-    fn is_capture_complete(&self, capture: &mut Self::Capture) -> bool;
+    fn capture_readers(&self, tag: Self::WriterTag) -> Self::Capture;
+
+    fn is_capture_complete(&self, capture: &mut Self::Capture, tag: Self::WriterTag) -> bool;
 
     fn begin_guard(&self, tag: &Self::ReaderTag) -> Self::RawGuard;
 
@@ -107,6 +111,7 @@ pub unsafe trait Strategy: Sized {
 
 pub struct Writer<B: BufferRef> {
     inner: Pin<B::Strong>,
+    tag: WriterTag<B>,
 }
 
 pub struct Reader<B: BufferRef> {
@@ -150,6 +155,7 @@ pub struct BufferData<W, S, B, E: ?Sized> {
 pub struct Swap<'a, B: BufferRef> {
     strategy: &'a B::Strategy,
     capture: Capture<B>,
+    tag: WriterTag<B>,
 }
 
 #[non_exhaustive]
@@ -174,8 +180,18 @@ impl<'a, B: BufferRef> Clone for Split<'a, B> {
 pub fn new<B: BufferRef>(buffer_ref: B) -> (Reader<B>, Writer<B>) {
     let (writer, reader) = buffer_ref.split();
     writer.which.store(false, Ordering::Release);
-    let tag = writer.strategy.create_tag();
-    (Reader { inner: reader, tag }, Writer { inner: writer })
+    let reader_tag = unsafe { writer.strategy.reader_tag() };
+    let writer_tag = unsafe { writer.strategy.writer_tag() };
+    (
+        Reader {
+            inner: reader,
+            tag: reader_tag,
+        },
+        Writer {
+            inner: writer,
+            tag: writer_tag,
+        },
+    )
 }
 
 #[derive(Default)]
@@ -252,8 +268,8 @@ impl<B: BufferRef> Drop for FinishSwapOnDrop<'_, B> {
 impl<B: BufferRef> Swap<'_, B> {
     #[inline]
     pub fn is_swap_completed(&mut self) -> bool {
-        if self.strategy.is_capture_complete(&mut self.capture) {
-            self.strategy.fence();
+        if self.strategy.is_capture_complete(&mut self.capture, self.tag) {
+            self.strategy.fence(self.tag);
             true
         } else {
             false
@@ -300,7 +316,7 @@ impl<B: BufferRef> Swap<'_, B> {
 impl<B: BufferRef> Writer<B> {
     #[inline]
     pub fn reader(this: &Self) -> Reader<B> {
-        let tag = this.inner.strategy.create_tag();
+        let tag = unsafe { this.inner.strategy.reader_tag() };
         Reader {
             tag,
             inner: B::downgrade(&this.inner),
@@ -370,19 +386,21 @@ impl<B: BufferRef> Writer<B> {
         swap.finish_swap_with(bake(split, f))
     }
 
+    pub unsafe fn swap_buffers_unchecked(this: &mut Self) { this.inner.which.fetch_xor(true, Ordering::Release); }
+
     #[inline]
     pub unsafe fn start_buffer_swap(this: &mut Self) -> Swap<'_, B> { Self::split_start_buffer_swap(this).0 }
 
     #[inline]
     pub unsafe fn split_start_buffer_swap(this: &mut Self) -> (Swap<'_, B>, Split<'_, B>) {
         let inner = &*this.inner;
-        inner.strategy.fence();
+        inner.strategy.fence(this.tag);
 
         // `fetch_not` == `fetch_xor(true)`
         let which = inner.which.fetch_xor(true, Ordering::Release);
         let which = !which;
 
-        let capture = inner.strategy.capture_readers();
+        let capture = inner.strategy.capture_readers(this.tag);
         let read = inner.buffers.read_buffer(which);
         let write = inner.buffers.write_buffer(which);
         let extra = &inner.extra;
@@ -391,6 +409,7 @@ impl<B: BufferRef> Writer<B> {
             Swap {
                 strategy: &inner.strategy,
                 capture,
+                tag: this.tag,
             },
             Split {
                 read: &*read,
@@ -410,7 +429,7 @@ impl<B: BufferRef> Reader<B> {
     #[inline]
     pub fn try_clone(&self) -> Result<Self, B::UpgradeError> {
         let inner = B::upgrade(&self.inner)?;
-        let tag = inner.strategy.create_tag();
+        let tag = unsafe { inner.strategy.reader_tag() };
         Ok(Reader {
             inner: self.inner.clone(),
             tag,

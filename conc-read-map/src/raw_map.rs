@@ -1,7 +1,9 @@
 use super::{RawMap, RawMapAccess, RawMapWithCapacity};
-use std::borrow::Borrow;
-use std::collections::{BTreeMap, HashMap};
-use std::hash::Hash;
+use std::{
+    borrow::Borrow,
+    collections::{BTreeMap, HashMap},
+    hash::Hash,
+};
 
 impl<K: Hash + Eq, V> RawMap for HashMap<K, V> {
     type Key = K;
@@ -14,29 +16,17 @@ impl<K: Hash + Eq, V> RawMap for HashMap<K, V> {
         (a, b)
     }
 
-    fn len(&self) -> usize {
-        self.len()
-    }
+    fn len(&self) -> usize { self.len() }
 
-    fn clear(&mut self) {
-        self.clear()
-    }
+    fn clear(&mut self) { self.clear() }
 
-    fn is_empty(&self) -> bool {
-        self.is_empty()
-    }
+    fn is_empty(&self) -> bool { self.is_empty() }
 
-    fn insert(&mut self, key: Self::Key, value: Self::Value) {
-        self.insert(key, value);
-    }
+    fn insert(&mut self, key: Self::Key, value: Self::Value) { self.insert(key, value); }
 
-    fn reserve(&mut self, cap: usize) {
-        self.reserve(cap)
-    }
+    fn reserve(&mut self, cap: usize) { self.reserve(cap) }
 
-    fn remove(&mut self, key: &Self::Key) {
-        self.remove(key);
-    }
+    fn remove(&mut self, key: &Self::Key) { self.remove(key); }
 }
 
 impl<K: Hash + Eq, V> RawMapWithCapacity for HashMap<K, V> {
@@ -54,9 +44,7 @@ where
     Q: Hash + Eq,
     Self: Clone,
 {
-    fn get(&self, key: &Q) -> Option<&Self::Value> {
-        self.get(key)
-    }
+    fn get(&self, key: &Q) -> Option<&Self::Value> { self.get(key) }
 }
 
 impl<K: Ord + Eq, V> RawMap for BTreeMap<K, V> {
@@ -70,25 +58,15 @@ impl<K: Ord + Eq, V> RawMap for BTreeMap<K, V> {
         (a, b)
     }
 
-    fn len(&self) -> usize {
-        self.len()
-    }
+    fn len(&self) -> usize { self.len() }
 
-    fn is_empty(&self) -> bool {
-        self.is_empty()
-    }
+    fn is_empty(&self) -> bool { self.is_empty() }
 
-    fn clear(&mut self) {
-        self.clear()
-    }
+    fn clear(&mut self) { self.clear() }
 
-    fn insert(&mut self, key: Self::Key, value: Self::Value) {
-        self.insert(key, value);
-    }
+    fn insert(&mut self, key: Self::Key, value: Self::Value) { self.insert(key, value); }
 
-    fn remove(&mut self, key: &Self::Key) {
-        self.remove(key);
-    }
+    fn remove(&mut self, key: &Self::Key) { self.remove(key); }
 
     fn reserve(&mut self, _: usize) {}
 }
@@ -99,7 +77,5 @@ where
     Q: Ord + Eq,
     Self: Clone,
 {
-    fn get(&self, key: &Q) -> Option<&Self::Value> {
-        self.get(key)
-    }
+    fn get(&self, key: &Q) -> Option<&Self::Value> { self.get(key) }
 }

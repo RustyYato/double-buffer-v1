@@ -1,7 +1,4 @@
-use crate::{
-    sync::{Capture as RawCapture, SyncStrategy},
-    Strategy,
-};
+use crate::{sync::Capture as RawCapture, Strategy};
 use core::sync::atomic::AtomicBool;
 use crossbeam_utils::Backoff;
 use parking_lot::Condvar;
@@ -41,6 +38,11 @@ pub struct Capture {
     backoff: Backoff,
 }
 
+pub struct ReaderTag(super::ReaderTag);
+#[derive(Clone, Copy)]
+pub struct WriterTag(super::WriterTag);
+pub struct RawGuard(super::RawGuard);
+
 impl ParkStrategy {
     #[cold]
     #[inline(never)]
@@ -51,27 +53,31 @@ impl ParkStrategy {
 }
 
 unsafe impl Strategy for ParkStrategy {
-    type ReaderTag = <SyncStrategy as Strategy>::ReaderTag;
+    type ReaderTag = ReaderTag;
+    type WriterTag = WriterTag;
     type Capture = Capture;
-    type RawGuard = <SyncStrategy as Strategy>::RawGuard;
+    type RawGuard = RawGuard;
 
     #[inline]
-    fn create_tag(&self) -> Self::ReaderTag { self.raw.create_tag() }
+    unsafe fn reader_tag(&self) -> Self::ReaderTag { ReaderTag(self.raw.reader_tag()) }
 
     #[inline]
-    fn fence(&self) { self.raw.fence() }
+    unsafe fn writer_tag(&self) -> Self::WriterTag { WriterTag(self.raw.writer_tag()) }
 
     #[inline]
-    fn capture_readers(&self) -> Self::Capture {
+    fn fence(&self, WriterTag(tag): Self::WriterTag) { self.raw.fence(tag) }
+
+    #[inline]
+    fn capture_readers(&self, WriterTag(tag): Self::WriterTag) -> Self::Capture {
         Capture {
-            raw: self.raw.capture_readers(),
+            raw: self.raw.capture_readers(tag),
             backoff: Backoff::new(),
         }
     }
 
     #[inline]
-    fn is_capture_complete(&self, capture: &mut Self::Capture) -> bool {
-        let is_completed = self.raw.is_capture_complete(&mut capture.raw);
+    fn is_capture_complete(&self, capture: &mut Self::Capture, WriterTag(tag): Self::WriterTag) -> bool {
+        let is_completed = self.raw.is_capture_complete(&mut capture.raw, tag);
 
         if !is_completed {
             if capture.backoff.is_completed() {
@@ -85,8 +91,8 @@ unsafe impl Strategy for ParkStrategy {
     }
 
     #[inline]
-    fn begin_guard(&self, tag: &Self::ReaderTag) -> Self::RawGuard { self.raw.begin_guard(tag) }
+    fn begin_guard(&self, ReaderTag(tag): &Self::ReaderTag) -> Self::RawGuard { RawGuard(self.raw.begin_guard(tag)) }
 
     #[inline]
-    fn end_guard(&self, guard: Self::RawGuard) { self.raw.end_guard(guard) }
+    fn end_guard(&self, RawGuard(guard): Self::RawGuard) { self.raw.end_guard(guard) }
 }

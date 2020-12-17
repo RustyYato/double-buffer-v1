@@ -36,23 +36,31 @@ pub struct LocalStrategy {
 pub struct RawGuard(());
 pub struct Capture(());
 
+pub struct ReaderTag(());
+#[derive(Clone, Copy)]
+pub struct WriterTag(());
+
 #[cold]
 #[inline(never)]
 fn swap_buffers_fail() -> ! { panic!("Tried to swap buffers of a local-double buffer while readers were reading!") }
 
 unsafe impl Strategy for LocalStrategy {
-    type ReaderTag = ();
+    type ReaderTag = ReaderTag;
+    type WriterTag = WriterTag;
     type Capture = Capture;
     type RawGuard = RawGuard;
 
     #[inline]
-    fn create_tag(&self) -> Self::ReaderTag {}
+    unsafe fn reader_tag(&self) -> Self::ReaderTag { ReaderTag(()) }
 
     #[inline]
-    fn fence(&self) {}
+    unsafe fn writer_tag(&self) -> Self::WriterTag { WriterTag(()) }
 
     #[inline]
-    fn capture_readers(&self) -> Self::Capture {
+    fn fence(&self, _: Self::WriterTag) {}
+
+    #[inline]
+    fn capture_readers(&self, _: Self::WriterTag) -> Self::Capture {
         if self.num_readers.get() != 0 {
             swap_buffers_fail()
         }
@@ -61,7 +69,7 @@ unsafe impl Strategy for LocalStrategy {
     }
 
     #[inline]
-    fn is_capture_complete(&self, _: &mut Self::Capture) -> bool { true }
+    fn is_capture_complete(&self, _: &mut Self::Capture, _: Self::WriterTag) -> bool { true }
 
     #[inline]
     fn begin_guard(&self, _: &Self::ReaderTag) -> Self::RawGuard {

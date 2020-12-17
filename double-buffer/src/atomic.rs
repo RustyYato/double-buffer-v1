@@ -36,22 +36,32 @@ pub struct AtomicStrategy {
 pub struct RawGuard(());
 pub struct Capture(());
 
+pub struct ReaderTag(());
+#[derive(Clone, Copy)]
+pub struct WriterTag(());
+
 unsafe impl Strategy for AtomicStrategy {
-    type ReaderTag = ();
+    type ReaderTag = ReaderTag;
+    type WriterTag = WriterTag;
     type Capture = Capture;
     type RawGuard = RawGuard;
 
     #[inline]
-    fn create_tag(&self) -> Self::ReaderTag {}
+    unsafe fn reader_tag(&self) -> Self::ReaderTag { ReaderTag(()) }
 
     #[inline]
-    fn fence(&self) {}
+    unsafe fn writer_tag(&self) -> Self::WriterTag { WriterTag(()) }
 
     #[inline]
-    fn capture_readers(&self) -> Self::Capture { Capture(()) }
+    fn fence(&self, _: Self::WriterTag) {}
 
     #[inline]
-    fn is_capture_complete(&self, _: &mut Self::Capture) -> bool { self.num_readers.load(Ordering::Acquire) == 0 }
+    fn capture_readers(&self, _: Self::WriterTag) -> Self::Capture { Capture(()) }
+
+    #[inline]
+    fn is_capture_complete(&self, _: &mut Self::Capture, _: Self::WriterTag) -> bool {
+        self.num_readers.load(Ordering::Acquire) == 0
+    }
 
     fn begin_guard(&self, _: &Self::ReaderTag) -> Self::RawGuard {
         use crossbeam_utils::Backoff;
