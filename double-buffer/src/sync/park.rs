@@ -6,7 +6,7 @@ use parking_lot::Condvar;
 pub type BufferData<B, E = ()> = crate::BufferData<AtomicBool, ParkStrategy, B, E>;
 
 pub mod owned {
-    pub type BufferRef<B, E = ()> = core::pin::Pin<std::sync::Arc<super::BufferData<B, E>>>;
+    pub type BufferRef<B, E = ()> = std::sync::Arc<super::BufferData<B, E>>;
     pub type Writer<B, E = ()> = crate::Writer<BufferRef<B, E>>;
     pub type Reader<B, E = ()> = crate::Reader<BufferRef<B, E>>;
     pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::ReaderGuard<'reader, BufferRef<B, E>, T>;
@@ -48,7 +48,7 @@ impl ParkStrategy {
     #[inline(never)]
     fn park(&self) {
         self.cv
-            .wait_for(&mut self.raw.tag_list.lock(), std::time::Duration::from_millis(10));
+            .wait_for(&mut self.raw.tag_list.lock(), std::time::Duration::from_micros(100));
     }
 }
 
@@ -96,7 +96,9 @@ unsafe impl Strategy for ParkStrategy {
     }
 
     #[inline]
-    fn begin_guard(&self, ReaderTag(tag): &Self::ReaderTag) -> Self::RawGuard { RawGuard(self.raw.begin_guard(tag)) }
+    fn begin_guard(&self, ReaderTag(tag): &mut Self::ReaderTag) -> Self::RawGuard {
+        RawGuard(self.raw.begin_guard(tag))
+    }
 
     #[inline]
     fn end_guard(&self, RawGuard(guard): Self::RawGuard) { self.raw.end_guard(guard) }

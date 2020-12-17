@@ -35,7 +35,7 @@ impl<K: Clone + Hash + Eq, V: Clone> Operation<HashMap<K, V>> for MapOp<K, V> {
 
 #[test]
 fn map_ops() {
-    let buffer_data = Rc::pin(crate::local::BufferData::<_, ()>::default());
+    let buffer_data = Rc::new(crate::local::BufferData::<_, ()>::default());
     let (mut r, w) = crate::new(buffer_data);
     let mut w = crate::op::Writer::from(w);
 

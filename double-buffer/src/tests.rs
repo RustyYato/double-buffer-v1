@@ -10,7 +10,7 @@ mod map;
 
 #[test]
 pub fn is_dangling() {
-    let buffer_data = Arc::pin(BufferData::new((), ()));
+    let buffer_data = Arc::new(BufferData::new((), ()));
     let (r, _) = new(buffer_data);
 
     assert!(r.is_dangling());
@@ -18,7 +18,7 @@ pub fn is_dangling() {
 
 #[test]
 fn clone_read() {
-    let buffer_data = Arc::pin(BufferData::new((), ()));
+    let buffer_data = Arc::new(BufferData::new((), ()));
     let (r, _w) = new(buffer_data);
 
     r.try_clone().unwrap();
@@ -26,7 +26,7 @@ fn clone_read() {
 
 #[test]
 fn write_before_read() {
-    let buffer_data = Arc::pin(BufferData::new(0, 0));
+    let buffer_data = Arc::new(BufferData::new(0, 0));
     let (mut r, mut w) = new(buffer_data);
 
     let buffer = &mut *w;
@@ -41,7 +41,7 @@ fn write_before_read() {
 #[test]
 #[ignore = "this test will block forever"]
 fn swap_while_read() {
-    let buffer_data = Arc::pin(BufferData::new(0, 0));
+    let buffer_data = Arc::new(BufferData::new(0, 0));
     let (mut r, mut w) = new(buffer_data);
 
     let _guard = r.get();
@@ -52,7 +52,7 @@ fn swap_while_read() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn wait() {
-    let buffer_data = Arc::pin(BufferData::new(0, 0));
+    let buffer_data = Arc::new(BufferData::new(0, 0));
     let (mut r, mut w) = new(buffer_data);
 
     let r = &mut r;
@@ -80,7 +80,7 @@ fn wait() {
 #[test]
 #[ignore = "this test will block forever"]
 fn blocks() {
-    let buffer_data = Arc::pin(BufferData::new(0, 0));
+    let buffer_data = Arc::new(BufferData::new(0, 0));
     let (mut r, mut w) = new(buffer_data);
 
     let (tx0, rx0) = bounded(1);

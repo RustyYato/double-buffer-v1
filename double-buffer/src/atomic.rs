@@ -6,7 +6,7 @@ pub type BufferData<B, E = ()> = crate::BufferData<AtomicBool, AtomicStrategy, B
 
 #[cfg(feature = "alloc")]
 pub mod owned {
-    pub type BufferRef<B, E = ()> = core::pin::Pin<std::sync::Arc<super::BufferData<B, E>>>;
+    pub type BufferRef<B, E = ()> = std::sync::Arc<super::BufferData<B, E>>;
     pub type Writer<B, E = ()> = crate::Writer<BufferRef<B, E>>;
     pub type Reader<B, E = ()> = crate::Reader<BufferRef<B, E>>;
     pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::ReaderGuard<'reader, BufferRef<B, E>, T>;
@@ -63,7 +63,7 @@ unsafe impl Strategy for AtomicStrategy {
         self.num_readers.load(Ordering::Acquire) == 0
     }
 
-    fn begin_guard(&self, _: &Self::ReaderTag) -> Self::RawGuard {
+    fn begin_guard(&self, _: &mut Self::ReaderTag) -> Self::RawGuard {
         use crossbeam_utils::Backoff;
 
         let num_readers = &self.num_readers;

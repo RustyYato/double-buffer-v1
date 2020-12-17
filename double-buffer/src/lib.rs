@@ -106,7 +106,7 @@ pub unsafe trait Strategy: Sized {
 
     fn is_capture_complete(&self, capture: &mut Self::Capture, tag: Self::WriterTag) -> bool;
 
-    fn begin_guard(&self, tag: &Self::ReaderTag) -> Self::RawGuard;
+    fn begin_guard(&self, tag: &mut Self::ReaderTag) -> Self::RawGuard;
 
     fn end_guard(&self, guard: Self::RawGuard);
 }
@@ -135,7 +135,7 @@ impl<B: BufferRef> Drop for RawGuard<B> {
     fn drop(&mut self) { unsafe { self.keep_alive.strategy.end_guard(ManuallyDrop::take(&mut self.raw)) } }
 }
 
-struct Buffers<B>(UnsafeCell<[B; 2]>);
+pub struct Buffers<B>(UnsafeCell<[B; 2]>);
 
 unsafe impl<B: Send> Send for Buffers<B> {}
 unsafe impl<B: Sync> Sync for Buffers<B> {}
@@ -149,9 +149,9 @@ impl<B> Buffers<B> {
 pub struct BufferData<W, S, B, E: ?Sized> {
     _pin: PhantomPinned,
     which: W,
-    buffers: Buffers<B>,
-    strategy: S,
-    extra: E,
+    pub buffers: Buffers<B>,
+    pub strategy: S,
+    pub extra: E,
 }
 
 pub struct Swap<'a, B: BufferRef> {
@@ -201,12 +201,18 @@ fn snooze(backoff: &crossbeam_utils::Backoff) { backoff.snooze() }
 
 #[derive(Default)]
 pub struct BufferDataBuilder<S, B, E> {
-    pub buffers: B,
+    pub buffers: [B; 2],
     pub strategy: S,
     pub extra: E,
 }
 
-impl<B, S: Strategy, E> BufferDataBuilder<S, [B; 2], E> {
+impl<T> Buffers<T> {
+    pub fn get(&self) -> &[T; 2] { unsafe { &*self.0.get() } }
+
+    pub fn get_mut(&mut self) -> &mut [T; 2] { unsafe { &mut *self.0.get() } }
+}
+
+impl<B, S: Strategy, E> BufferDataBuilder<S, B, E> {
     pub fn build<W: TrustedRadium<Item = bool>>(self) -> BufferData<W, S, B, E> {
         BufferData {
             _pin: PhantomPinned,
@@ -249,10 +255,6 @@ where
     W: TrustedRadium<Item = bool>,
     S: Default + Strategy,
 {
-    pub fn extra(&self) -> &E { &self.extra }
-
-    pub fn strategy(&self) -> &S { &self.strategy }
-
     pub fn split_mut(self: Pin<&mut Self>) -> (Reader<Pin<&mut Self>>, Writer<Pin<&mut Self>>) { new(self) }
 }
 
@@ -451,7 +453,7 @@ impl<B: BufferRef> Reader<B> {
     pub fn try_get(&mut self) -> Result<ReaderGuard<'_, B>, B::UpgradeError> {
         let keep_alive = B::upgrade(&self.inner)?;
         let inner = &*keep_alive;
-        let guard = inner.strategy.begin_guard(&self.tag);
+        let guard = inner.strategy.begin_guard(&mut self.tag);
 
         let which = inner.which.load(Ordering::Acquire);
         let buffer = inner.buffers.read_buffer(which);

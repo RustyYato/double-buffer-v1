@@ -13,7 +13,7 @@ pub mod park;
 pub type BufferData<B, E = ()> = crate::BufferData<AtomicBool, SyncStrategy, B, E>;
 
 pub mod owned {
-    pub type BufferRef<B, E = ()> = core::pin::Pin<std::sync::Arc<super::BufferData<B, E>>>;
+    pub type BufferRef<B, E = ()> = std::sync::Arc<super::BufferData<B, E>>;
     pub type Writer<B, E = ()> = crate::Writer<BufferRef<B, E>>;
     pub type Reader<B, E = ()> = crate::Reader<BufferRef<B, E>>;
     pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::ReaderGuard<'reader, BufferRef<B, E>, T>;
@@ -95,7 +95,7 @@ unsafe impl Strategy for SyncStrategy {
     }
 
     #[inline]
-    fn begin_guard(&self, tag: &Self::ReaderTag) -> Self::RawGuard {
+    fn begin_guard(&self, tag: &mut Self::ReaderTag) -> Self::RawGuard {
         tag.0.fetch_add(1, Ordering::Acquire);
         RawGuard { tag: tag.0.clone() }
     }

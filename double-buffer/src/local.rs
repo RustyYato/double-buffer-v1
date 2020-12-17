@@ -6,7 +6,7 @@ pub type BufferData<B, E = ()> = crate::BufferData<core::cell::Cell<bool>, Local
 
 #[cfg(feature = "alloc")]
 pub mod owned {
-    pub type BufferRef<B, E = ()> = core::pin::Pin<std::rc::Rc<super::BufferData<B, E>>>;
+    pub type BufferRef<B, E = ()> = std::rc::Rc<super::BufferData<B, E>>;
     pub type Writer<B, E = ()> = crate::Writer<BufferRef<B, E>>;
     pub type Reader<B, E = ()> = crate::Reader<BufferRef<B, E>>;
     pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::ReaderGuard<'reader, BufferRef<B, E>, T>;
@@ -94,7 +94,7 @@ unsafe impl Strategy for LocalStrategy {
     fn is_capture_complete(&self, _: &mut Self::Capture, _: Self::WriterTag) -> bool { true }
 
     #[inline]
-    fn begin_guard(&self, _: &Self::ReaderTag) -> Self::RawGuard {
+    fn begin_guard(&self, _: &mut Self::ReaderTag) -> Self::RawGuard {
         let num_readers = &self.num_readers;
         num_readers.set(num_readers.get().checked_add(1).unwrap_or_else(begin_guard_fail));
         RawGuard(())

@@ -49,7 +49,7 @@ impl<T: ?Sized> Clone for PinnedRcWeak<T> {
 }
 
 #[cfg(feature = "alloc")]
-unsafe impl<W, B, S, E> BufferRef for Pin<Rc<BufferData<W, S, B, E>>>
+unsafe impl<W, B, S, E> BufferRef for Rc<BufferData<W, S, B, E>>
 where
     W: TrustedRadium<Item = bool>,
     S: Strategy,
@@ -64,12 +64,11 @@ where
     type Strong = Rc<BufferRefData<Self>>;
     type Weak = PinnedRcWeak<BufferRefData<Self>>;
 
-    fn split(self) -> (Pin<Self::Strong>, Self::Weak) {
+    fn split(mut self) -> (Pin<Self::Strong>, Self::Weak) {
         unsafe {
-            let mut this = Pin::into_inner_unchecked(self);
-            assert!(Rc::get_mut(&mut this).is_some(), "Tried to split a shared `Rc`!");
-            let weak = Rc::downgrade(&this);
-            (Pin::new_unchecked(this), PinnedRcWeak(weak))
+            assert!(Rc::get_mut(&mut self).is_some(), "Tried to split a shared `Rc`!");
+            let weak = Rc::downgrade(&self);
+            (Pin::new_unchecked(self), PinnedRcWeak(weak))
         }
     }
 
@@ -124,7 +123,7 @@ impl<T: ?Sized> Clone for PinnedArcWeak<T> {
 }
 
 #[cfg(feature = "alloc")]
-unsafe impl<W, B, S, E> BufferRef for Pin<Arc<BufferData<W, S, B, E>>>
+unsafe impl<W, B, S, E> BufferRef for Arc<BufferData<W, S, B, E>>
 where
     W: TrustedRadium<Item = bool>,
     S: Strategy,
@@ -141,7 +140,7 @@ where
 
     fn split(self) -> (Pin<Self::Strong>, Self::Weak) {
         unsafe {
-            let mut this = Pin::into_inner_unchecked(self);
+            let mut this = self;
             assert!(Arc::get_mut(&mut this).is_some(), "Tried to split a shared `Arc`!");
             let weak = Arc::downgrade(&this);
             (Pin::new_unchecked(this), PinnedArcWeak(weak))
