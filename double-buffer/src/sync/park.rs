@@ -77,14 +77,19 @@ unsafe impl Strategy for ParkStrategy {
 
     #[inline]
     fn is_capture_complete(&self, capture: &mut Self::Capture, WriterTag(tag): Self::WriterTag) -> bool {
+        #[cold]
+        fn cold(strategy: &ParkStrategy, backoff: &Backoff) {
+            if backoff.is_completed() {
+                strategy.park();
+            } else {
+                backoff.snooze();
+            }
+        }
+
         let is_completed = self.raw.is_capture_complete(&mut capture.raw, tag);
 
         if !is_completed {
-            if capture.backoff.is_completed() {
-                self.park();
-            } else {
-                capture.backoff.snooze();
-            }
+            cold(self, &capture.backoff)
         }
 
         is_completed

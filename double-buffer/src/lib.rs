@@ -194,6 +194,9 @@ pub fn new<B: BufferRef>(buffer_ref: B) -> (Reader<B>, Writer<B>) {
     )
 }
 
+#[cold]
+fn snooze(backoff: &crossbeam_utils::Backoff) { backoff.snooze() }
+
 #[derive(Default)]
 pub struct BufferDataBuilder<S, B, E> {
     pub buffers: B,
@@ -260,7 +263,7 @@ impl<B: BufferRef> Drop for FinishSwapOnDrop<'_, B> {
     #[inline]
     fn drop(&mut self) {
         while !self.swap.is_swap_completed() {
-            self.backoff.snooze()
+            crate::snooze(&self.backoff)
         }
     }
 }
@@ -284,7 +287,7 @@ impl<B: BufferRef> Swap<'_, B> {
         let FinishSwapOnDrop { swap, backoff } = &mut on_drop;
 
         while !swap.is_swap_completed() {
-            backoff.snooze()
+            crate::snooze(&backoff)
         }
 
         core::mem::forget(on_drop);

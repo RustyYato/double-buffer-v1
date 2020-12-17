@@ -82,7 +82,7 @@ unsafe impl Strategy for AtomicStrategy {
                 }
             }
 
-            backoff.snooze()
+            crate::snooze(&backoff)
         }
     }
 

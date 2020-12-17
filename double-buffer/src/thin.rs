@@ -65,6 +65,10 @@ impl<T: ?Sized + fmt::Debug, W: TrustedRadium<Item = usize>> fmt::Debug for Thin
 
 impl<T: ?Sized, W: TrustedRadium<Item = usize>> Clone for Thin<T, W> {
     fn clone(&self) -> Self {
+        #[cold]
+        #[inline(never)]
+        fn clone_fail() -> ! { panic!("Tried to clone `Thin<T, W>` too many times") }
+
         unsafe {
             use crossbeam_utils::Backoff;
 
@@ -83,10 +87,10 @@ impl<T: ?Sized, W: TrustedRadium<Item = usize>> Clone for Thin<T, W> {
                         break
                     }
                 } else {
-                    panic!("Tried to clone `Thin<T, W>` too many times")
+                    clone_fail()
                 }
 
-                backoff.snooze()
+                crate::snooze(&backoff)
             }
         }
 
