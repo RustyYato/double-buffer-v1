@@ -230,7 +230,7 @@ where
 }
 
 impl<B: BufferRef> Swap<'_, B> {
-    fn swap_completed(&mut self) -> bool {
+    pub fn is_swap_completed(&mut self) -> bool {
         if self.strategy.is_capture_complete(&mut self.capture) {
             self.strategy.fence();
             true
@@ -238,6 +238,14 @@ impl<B: BufferRef> Swap<'_, B> {
             false
         }
     }
+}
+
+struct FinishSwapOnDrop<'a, B: BufferRef> {
+    swap: Swap<'a, B>,
+}
+
+impl<B: BufferRef> Drop for FinishSwapOnDrop<'_, B> {
+    fn drop(&mut self) { while !self.swap.is_swap_completed() {} }
 }
 
 impl<B: BufferRef> Writer<B> {
@@ -298,17 +306,25 @@ impl<B: BufferRef> Writer<B> {
     }
 
     pub fn swap_buffers(this: &mut Self) {
-        let mut swap = unsafe { Self::start_buffer_swap(this) };
+        let swap = unsafe { Self::start_buffer_swap(this) };
+        let mut on_drop = FinishSwapOnDrop { swap };
+        let swap = &mut on_drop.swap;
 
-        while !swap.swap_completed() {}
+        while !swap.is_swap_completed() {}
+
+        core::mem::forget(on_drop);
     }
 
     pub fn swap_buffers_with<F: FnMut(Split<'_, B>)>(this: &mut Self, mut f: F) {
-        let (mut swap, split) = unsafe { Self::split_start_buffer_swap(this) };
+        let (swap, split) = unsafe { Self::split_start_buffer_swap(this) };
+        let mut on_drop = FinishSwapOnDrop { swap };
+        let swap = &mut on_drop.swap;
 
-        while !swap.swap_completed() {
+        while !swap.is_swap_completed() {
             f(split)
         }
+
+        core::mem::forget(on_drop);
     }
 
     pub unsafe fn start_buffer_swap(this: &mut Self) -> Swap<'_, B> { Self::split_start_buffer_swap(this).0 }
