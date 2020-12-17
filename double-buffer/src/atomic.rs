@@ -41,12 +41,16 @@ unsafe impl Strategy for AtomicStrategy {
     type Capture = Capture;
     type RawGuard = RawGuard;
 
+    #[inline]
     fn create_tag(&self) -> Self::ReaderTag {}
 
+    #[inline]
     fn fence(&self) {}
 
+    #[inline]
     fn capture_readers(&self) -> Self::Capture { Capture(()) }
 
+    #[inline]
     fn is_capture_complete(&self, _: &mut Self::Capture) -> bool { self.num_readers.load(Ordering::Acquire) == 0 }
 
     fn begin_guard(&self, _: &Self::ReaderTag) -> Self::RawGuard {
@@ -72,5 +76,6 @@ unsafe impl Strategy for AtomicStrategy {
         }
     }
 
+    #[inline]
     fn end_guard(&self, _: Self::RawGuard) { self.num_readers.fetch_sub(1, Ordering::Release); }
 }

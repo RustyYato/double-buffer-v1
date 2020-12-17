@@ -45,10 +45,13 @@ unsafe impl Strategy for LocalStrategy {
     type Capture = Capture;
     type RawGuard = RawGuard;
 
+    #[inline]
     fn create_tag(&self) -> Self::ReaderTag {}
 
+    #[inline]
     fn fence(&self) {}
 
+    #[inline]
     fn capture_readers(&self) -> Self::Capture {
         if self.num_readers.get() != 0 {
             swap_buffers_fail()
@@ -57,8 +60,10 @@ unsafe impl Strategy for LocalStrategy {
         Capture(())
     }
 
+    #[inline]
     fn is_capture_complete(&self, _: &mut Self::Capture) -> bool { true }
 
+    #[inline]
     fn begin_guard(&self, _: &Self::ReaderTag) -> Self::RawGuard {
         let num_readers = &self.num_readers;
         num_readers.set(
@@ -70,6 +75,7 @@ unsafe impl Strategy for LocalStrategy {
         RawGuard(())
     }
 
+    #[inline]
     fn end_guard(&self, _: Self::RawGuard) {
         let num_readers = &self.num_readers;
         num_readers.set(num_readers.get().wrapping_sub(1));

@@ -42,6 +42,8 @@ pub struct Capture {
 }
 
 impl ParkStrategy {
+    #[cold]
+    #[inline(never)]
     fn park(&self) {
         self.cv
             .wait_for(&mut self.raw.tag_list.lock(), std::time::Duration::from_millis(10));
@@ -53,10 +55,13 @@ unsafe impl Strategy for ParkStrategy {
     type Capture = Capture;
     type RawGuard = <SyncStrategy as Strategy>::RawGuard;
 
+    #[inline]
     fn create_tag(&self) -> Self::ReaderTag { self.raw.create_tag() }
 
+    #[inline]
     fn fence(&self) { self.raw.fence() }
 
+    #[inline]
     fn capture_readers(&self) -> Self::Capture {
         Capture {
             raw: self.raw.capture_readers(),
@@ -64,6 +69,7 @@ unsafe impl Strategy for ParkStrategy {
         }
     }
 
+    #[inline]
     fn is_capture_complete(&self, capture: &mut Self::Capture) -> bool {
         let is_completed = self.raw.is_capture_complete(&mut capture.raw);
 
@@ -78,7 +84,9 @@ unsafe impl Strategy for ParkStrategy {
         is_completed
     }
 
+    #[inline]
     fn begin_guard(&self, tag: &Self::ReaderTag) -> Self::RawGuard { self.raw.begin_guard(tag) }
 
+    #[inline]
     fn end_guard(&self, guard: Self::RawGuard) { self.raw.end_guard(guard) }
 }

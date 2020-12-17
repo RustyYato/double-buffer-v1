@@ -48,23 +48,22 @@ pub struct RawGuard {
     tag: Thin<AtomicU32>,
 }
 
-impl Drop for RawGuard {
-    fn drop(&mut self) { self.tag.fetch_add(1, Ordering::Release); }
-}
-
 unsafe impl Strategy for SyncStrategy {
     type ReaderTag = Tag;
     type Capture = Capture;
     type RawGuard = RawGuard;
 
+    #[inline]
     fn create_tag(&self) -> Self::ReaderTag {
         let tag = Thin::new(AtomicU32::new(0));
         self.tag_list.lock().push(tag.clone());
         Tag(tag)
     }
 
+    #[inline]
     fn fence(&self) { core::sync::atomic::fence(Ordering::SeqCst); }
 
+    #[inline]
     fn capture_readers(&self) -> Self::Capture {
         let mut active = SmallVec::new();
 
@@ -81,16 +80,19 @@ unsafe impl Strategy for SyncStrategy {
         Capture { active }
     }
 
+    #[inline]
     fn is_capture_complete(&self, capture: &mut Self::Capture) -> bool {
         capture.active.retain(|tag| tag.load(Ordering::Relaxed) & 1 == 1);
 
         capture.active.is_empty()
     }
 
+    #[inline]
     fn begin_guard(&self, tag: &Self::ReaderTag) -> Self::RawGuard {
         tag.0.fetch_add(1, Ordering::Acquire);
         RawGuard { tag: tag.0.clone() }
     }
 
+    #[inline]
     fn end_guard(&self, guard: Self::RawGuard) { guard.tag.fetch_add(1, Ordering::Acquire); }
 }
