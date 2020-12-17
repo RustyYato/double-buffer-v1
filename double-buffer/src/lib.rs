@@ -105,8 +105,6 @@ pub unsafe trait Strategy: Sized {
     fn end_guard(&self, guard: Self::RawGuard);
 }
 
-// pub unsafe trait Capture: Strategy {}
-
 pub struct Writer<B: BufferRef> {
     inner: Pin<B::Strong>,
 }
@@ -180,15 +178,33 @@ pub fn new<B: BufferRef>(buffer_ref: B) -> (Reader<B>, Writer<B>) {
     (Reader { inner: reader, tag }, Writer { inner: writer })
 }
 
-impl<R, B: Default, S, E: Default> Default for BufferData<R, B, S, E>
+#[derive(Default)]
+pub struct BufferDataBuilder<B, S, E> {
+    pub buffers: B,
+    pub strategy: S,
+    pub extra: E,
+}
+
+impl<B, S: Strategy, E> BufferDataBuilder<[B; 2], S, E> {
+    pub fn build<R: TrustedRadium<Item = bool>>(self) -> BufferData<R, B, S, E> {
+        BufferData {
+            _pin: PhantomPinned,
+            which: R::new(false),
+            buffers: Buffers(UnsafeCell::new(self.buffers)),
+            strategy: self.strategy,
+            extra: self.extra,
+        }
+    }
+}
+
+impl<R, B: Default, S> Default for BufferData<R, B, S, ()>
 where
     R: TrustedRadium<Item = bool>,
     B: Default,
     S: Default + Strategy,
-    E: Default,
 {
     #[inline]
-    fn default() -> Self { Self::with_extra(Default::default(), Default::default(), Default::default()) }
+    fn default() -> Self { BufferDataBuilder::default().build() }
 }
 
 impl<R, B, S> BufferData<R, B, S, ()>
@@ -197,23 +213,13 @@ where
     S: Default + Strategy,
 {
     #[inline]
-    pub fn new(front: B, back: B) -> Self { Self::with_extra(front, back, ()) }
-}
-
-impl<R, B, S, E> BufferData<R, B, S, E>
-where
-    R: TrustedRadium<Item = bool>,
-    S: Default + Strategy,
-{
-    #[inline]
-    pub fn with_extra(front: B, back: B, extra: E) -> Self {
-        Self {
-            _pin: PhantomPinned,
-            buffers: Buffers(UnsafeCell::new([front, back])),
-            which: R::new(false),
-            strategy: S::default(),
-            extra,
+    pub fn new(front: B, back: B) -> Self {
+        BufferDataBuilder {
+            buffers: [front, back],
+            strategy: Default::default(),
+            extra: Default::default(),
         }
+        .build()
     }
 }
 
