@@ -14,7 +14,7 @@ pub mod owned {
 
 #[cfg(feature = "alloc")]
 pub mod thin {
-    pub type BufferRef<B, E = ()> = std::boxed::Box<crate::thin::SyncThinInner<super::BufferData<B, E>>>;
+    pub type BufferRef<B, E = ()> = std::boxed::Box<crate::thin::ArcInner<super::BufferData<B, E>>>;
     pub type Writer<B, E = ()> = crate::Writer<BufferRef<B, E>>;
     pub type Reader<B, E = ()> = crate::Reader<BufferRef<B, E>>;
     pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::ReaderGuard<'reader, BufferRef<B, E>, T>;

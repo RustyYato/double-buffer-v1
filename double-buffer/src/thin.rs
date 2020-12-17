@@ -2,11 +2,11 @@ use crate::TrustedRadium;
 use core::{pin::Pin, sync::atomic::Ordering};
 use std::boxed::Box;
 
-pub type LocalThin<T> = Thin<T, core::cell::Cell<usize>>;
-pub type SyncThin<T> = Thin<T, core::sync::atomic::AtomicUsize>;
+pub type Rc<T> = Thin<T, core::cell::Cell<usize>>;
+pub type Arc<T> = Thin<T, core::sync::atomic::AtomicUsize>;
 
-pub type LocalThinInner<T> = ThinInner<T, core::cell::Cell<usize>>;
-pub type SyncThinInner<T> = ThinInner<T, core::sync::atomic::AtomicUsize>;
+pub type RcInner<T> = ThinInner<T, core::cell::Cell<usize>>;
+pub type ArcInner<T> = ThinInner<T, core::sync::atomic::AtomicUsize>;
 
 pub struct Thin<T: ?Sized, S: TrustedRadium<Item = usize>> {
     ptr: *mut ThinInner<T, S>,
@@ -96,6 +96,9 @@ impl<T: ?Sized, S: TrustedRadium<Item = usize>> Drop for Thin<T, S> {
     fn drop(&mut self) {
         unsafe {
             if 1 == self.strong().fetch_sub(1, Ordering::Release) {
+                if !S::IS_LOCAL {
+                    core::sync::atomic::fence(Ordering::Acquire);
+                }
                 drop_slow(Box::from_raw(self.ptr))
             }
         }
@@ -104,9 +107,4 @@ impl<T: ?Sized, S: TrustedRadium<Item = usize>> Drop for Thin<T, S> {
 
 #[cold]
 #[inline(never)]
-fn drop_slow<T: ?Sized, S: TrustedRadium<Item = usize>>(inner: Box<ThinInner<T, S>>) {
-    if !S::IS_LOCAL {
-        core::sync::atomic::fence(Ordering::Acquire);
-    }
-    drop(inner);
-}
+fn drop_slow<T: ?Sized, S: TrustedRadium<Item = usize>>(inner: Box<ThinInner<T, S>>) { drop(inner); }

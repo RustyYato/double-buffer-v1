@@ -1,4 +1,4 @@
-use crate::{thin::SyncThin as Thin, Strategy};
+use crate::{thin::Arc, Strategy};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use smallvec::SmallVec;
 
@@ -20,7 +20,7 @@ pub mod owned {
 }
 
 pub mod thin {
-    pub type BufferRef<B, E = ()> = std::boxed::Box<crate::thin::SyncThinInner<super::BufferData<B, E>>>;
+    pub type BufferRef<B, E = ()> = std::boxed::Box<crate::thin::ArcInner<super::BufferData<B, E>>>;
     pub type Writer<B, E = ()> = crate::Writer<BufferRef<B, E>>;
     pub type Reader<B, E = ()> = crate::Reader<BufferRef<B, E>>;
     pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::ReaderGuard<'reader, BufferRef<B, E>, T>;
@@ -36,18 +36,18 @@ pub mod reference {
 
 #[derive(Default)]
 pub struct SyncStrategy {
-    tag_list: Mutex<SmallVec<[Thin<AtomicU32>; 8]>>,
+    tag_list: Mutex<SmallVec<[Arc<AtomicU32>; 8]>>,
 }
 
 pub struct RawGuard {
-    tag: Thin<AtomicU32>,
+    tag: Arc<AtomicU32>,
 }
 
 pub struct Capture {
-    active: SmallVec<[Thin<AtomicU32>; 8]>,
+    active: SmallVec<[Arc<AtomicU32>; 8]>,
 }
 
-pub struct ReaderTag(Thin<AtomicU32>);
+pub struct ReaderTag(Arc<AtomicU32>);
 #[derive(Clone, Copy)]
 pub struct WriterTag(());
 
@@ -59,7 +59,7 @@ unsafe impl Strategy for SyncStrategy {
 
     #[inline]
     unsafe fn reader_tag(&self) -> Self::ReaderTag {
-        let tag = Thin::new(AtomicU32::new(0));
+        let tag = Arc::new(AtomicU32::new(0));
         self.tag_list.lock().push(tag.clone());
         ReaderTag(tag)
     }
@@ -75,7 +75,7 @@ unsafe impl Strategy for SyncStrategy {
         let mut active = SmallVec::new();
 
         self.tag_list.lock().retain(|tag| {
-            let is_alive = Thin::strong_count(tag) != 1;
+            let is_alive = Arc::strong_count(tag) != 1;
 
             if is_alive && tag.load(Ordering::Acquire) & 1 == 1 {
                 active.push(tag.clone())
