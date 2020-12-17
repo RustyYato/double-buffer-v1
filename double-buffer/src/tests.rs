@@ -1,6 +1,8 @@
 use test_crossbeam_channel::bounded;
 use test_crossbeam_utils::thread::scope;
 
+use std::sync::Arc;
+
 use crate::{new, sync::BufferData, Writer};
 
 #[cfg(feature = "std")]
@@ -8,24 +10,24 @@ mod map;
 
 #[test]
 pub fn is_dangling() {
-    let mut buffer_data = Box::pin(BufferData::new((), ()));
-    let (r, _) = new(buffer_data.as_mut());
+    let buffer_data = Arc::pin(BufferData::new((), ()));
+    let (r, _) = new(buffer_data);
 
     assert!(r.is_dangling());
 }
 
 #[test]
 fn clone_read() {
-    let mut buffer_data = Box::pin(BufferData::new((), ()));
-    let (r, _w) = new(buffer_data.as_mut());
+    let buffer_data = Arc::pin(BufferData::new((), ()));
+    let (r, _w) = new(buffer_data);
 
     r.try_clone().unwrap();
 }
 
 #[test]
 fn write_before_read() {
-    let mut buffer_data = Box::pin(BufferData::new(0, 0));
-    let (mut r, mut w) = new(buffer_data.as_mut());
+    let buffer_data = Arc::pin(BufferData::new(0, 0));
+    let (mut r, mut w) = new(buffer_data);
 
     let buffer = &mut *w;
     *buffer = 20;
@@ -39,8 +41,8 @@ fn write_before_read() {
 #[test]
 #[ignore = "this test will block forever"]
 fn swap_while_read() {
-    let mut buffer_data = Box::pin(BufferData::new(0, 0));
-    let (mut r, mut w) = new(buffer_data.as_mut());
+    let buffer_data = Arc::pin(BufferData::new(0, 0));
+    let (mut r, mut w) = new(buffer_data);
 
     let _guard = r.get();
 
@@ -50,8 +52,8 @@ fn swap_while_read() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn wait() {
-    let mut buffer_data = Box::pin(BufferData::new(0, 0));
-    let (mut r, mut w) = new(buffer_data.as_mut());
+    let buffer_data = Arc::pin(BufferData::new(0, 0));
+    let (mut r, mut w) = new(buffer_data);
 
     let r = &mut r;
 
@@ -78,8 +80,8 @@ fn wait() {
 #[test]
 #[ignore = "this test will block forever"]
 fn blocks() {
-    let mut buffer_data = Box::pin(BufferData::new(0, 0));
-    let (mut r, mut w) = new(buffer_data.as_mut());
+    let buffer_data = Arc::pin(BufferData::new(0, 0));
+    let (mut r, mut w) = new(buffer_data);
 
     let (tx0, rx0) = bounded(1);
     let (tx1, rx1) = bounded(1);
