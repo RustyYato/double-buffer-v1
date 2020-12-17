@@ -10,13 +10,13 @@ use std::{
     sync::{self, Arc},
 };
 
-unsafe impl<'a, R, B, S, E> BufferRef for Pin<&'a mut BufferData<R, S, B, E>>
+unsafe impl<'a, W, B, S, E> BufferRef for Pin<&'a mut BufferData<W, S, B, E>>
 where
-    R: TrustedRadium<Item = bool>,
+    W: TrustedRadium<Item = bool>,
     S: Strategy,
     E: ?Sized,
 {
-    type Whitch = R;
+    type Whitch = W;
     type Buffer = B;
     type Strategy = S;
     type Extra = E;
@@ -49,13 +49,13 @@ impl<T: ?Sized> Clone for PinnedRcWeak<T> {
 }
 
 #[cfg(feature = "alloc")]
-unsafe impl<R, B, S, E> BufferRef for Pin<Rc<BufferData<R, S, B, E>>>
+unsafe impl<W, B, S, E> BufferRef for Pin<Rc<BufferData<W, S, B, E>>>
 where
-    R: TrustedRadium<Item = bool>,
+    W: TrustedRadium<Item = bool>,
     S: Strategy,
     E: ?Sized,
 {
-    type Whitch = R;
+    type Whitch = W;
     type Buffer = B;
     type Strategy = S;
     type Extra = E;
@@ -86,14 +86,14 @@ where
 }
 
 #[cfg(feature = "alloc")]
-unsafe impl<R, B, S, E, C> BufferRef for Box<ThinInner<BufferData<R, S, B, E>, C>>
+unsafe impl<W, B, S, E, C> BufferRef for Box<ThinInner<BufferData<W, S, B, E>, C>>
 where
-    R: TrustedRadium<Item = bool>,
+    W: TrustedRadium<Item = bool>,
     C: TrustedRadium<Item = usize>,
     S: Strategy,
     E: ?Sized,
 {
-    type Whitch = R;
+    type Whitch = W;
     type Buffer = B;
     type Strategy = S;
     type Extra = E;
@@ -124,13 +124,13 @@ impl<T: ?Sized> Clone for PinnedArcWeak<T> {
 }
 
 #[cfg(feature = "alloc")]
-unsafe impl<R, B, S, E> BufferRef for Pin<Arc<BufferData<R, S, B, E>>>
+unsafe impl<W, B, S, E> BufferRef for Pin<Arc<BufferData<W, S, B, E>>>
 where
-    R: TrustedRadium<Item = bool>,
+    W: TrustedRadium<Item = bool>,
     S: Strategy,
     E: ?Sized,
 {
-    type Whitch = R;
+    type Whitch = W;
     type Buffer = B;
     type Strategy = S;
     type Extra = E;

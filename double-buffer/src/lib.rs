@@ -139,9 +139,9 @@ impl<B> Buffers<B> {
     fn write_buffer(&self, item: bool) -> *mut B { self.get_raw(!item) }
 }
 
-pub struct BufferData<R, S, B, E: ?Sized> {
+pub struct BufferData<W, S, B, E: ?Sized> {
     _pin: PhantomPinned,
-    which: R,
+    which: W,
     buffers: Buffers<B>,
     strategy: S,
     extra: E,
@@ -186,10 +186,10 @@ pub struct BufferDataBuilder<S, B, E> {
 }
 
 impl<B, S: Strategy, E> BufferDataBuilder<S, [B; 2], E> {
-    pub fn build<R: TrustedRadium<Item = bool>>(self) -> BufferData<R, S, B, E> {
+    pub fn build<W: TrustedRadium<Item = bool>>(self) -> BufferData<W, S, B, E> {
         BufferData {
             _pin: PhantomPinned,
-            which: R::new(false),
+            which: W::new(false),
             buffers: Buffers(UnsafeCell::new(self.buffers)),
             strategy: self.strategy,
             extra: self.extra,
@@ -197,9 +197,9 @@ impl<B, S: Strategy, E> BufferDataBuilder<S, [B; 2], E> {
     }
 }
 
-impl<R, B: Default, S> Default for BufferData<R, S, B, ()>
+impl<W, B: Default, S> Default for BufferData<W, S, B, ()>
 where
-    R: TrustedRadium<Item = bool>,
+    W: TrustedRadium<Item = bool>,
     B: Default,
     S: Default + Strategy,
 {
@@ -207,9 +207,9 @@ where
     fn default() -> Self { BufferDataBuilder::default().build() }
 }
 
-impl<R, B, S> BufferData<R, S, B, ()>
+impl<W, B, S> BufferData<W, S, B, ()>
 where
-    R: TrustedRadium<Item = bool>,
+    W: TrustedRadium<Item = bool>,
     S: Default + Strategy,
 {
     #[inline]
@@ -223,9 +223,9 @@ where
     }
 }
 
-impl<R, B, S, E: ?Sized> BufferData<R, S, B, E>
+impl<W, B, S, E: ?Sized> BufferData<W, S, B, E>
 where
-    R: TrustedRadium<Item = bool>,
+    W: TrustedRadium<Item = bool>,
     S: Default + Strategy,
 {
     pub fn extra(&self) -> &E { &self.extra }
@@ -310,8 +310,9 @@ impl<B: BufferRef> Writer<B> {
     #[inline]
     pub fn read(this: &Self) -> &B::Buffer {
         unsafe {
-            let which = this.inner.which.load_unchecked();
-            let read_buffer = this.inner.buffers.read_buffer(which);
+            let inner = &*this.inner;
+            let which = inner.which.load_unchecked();
+            let read_buffer = inner.buffers.read_buffer(which);
             &*read_buffer
         }
     }
@@ -424,7 +425,8 @@ impl<B: BufferRef> Reader<B> {
 
     #[inline]
     pub fn try_get(&mut self) -> Result<ReaderGuard<'_, B>, B::UpgradeError> {
-        let inner = B::upgrade(&self.inner)?;
+        let keep_alive = B::upgrade(&self.inner)?;
+        let inner = &*keep_alive;
         let guard = inner.strategy.begin_guard(&self.tag);
 
         let which = inner.which.load(Ordering::Acquire);
@@ -434,7 +436,7 @@ impl<B: BufferRef> Reader<B> {
             value: unsafe { &*buffer },
             raw: RawGuard {
                 raw: ManuallyDrop::new(guard),
-                keep_alive: inner,
+                keep_alive,
             },
         })
     }
