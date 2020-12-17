@@ -2,7 +2,7 @@ use core::cell::Cell;
 
 use crate::Strategy;
 
-pub type BufferData<B, E = ()> = crate::BufferData<core::cell::Cell<bool>, B, LocalStrategy, E>;
+pub type BufferData<B, E = ()> = crate::BufferData<core::cell::Cell<bool>, LocalStrategy, B, E>;
 
 #[cfg(feature = "alloc")]
 pub mod owned {

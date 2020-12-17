@@ -6,7 +6,7 @@ use core::sync::atomic::AtomicBool;
 use crossbeam_utils::Backoff;
 use parking_lot::Condvar;
 
-pub type BufferData<B, E = ()> = crate::BufferData<AtomicBool, B, ParkStrategy, E>;
+pub type BufferData<B, E = ()> = crate::BufferData<AtomicBool, ParkStrategy, B, E>;
 
 pub mod owned {
     pub type BufferRef<B, E = ()> = core::pin::Pin<std::sync::Arc<super::BufferData<B, E>>>;

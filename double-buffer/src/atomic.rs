@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::Strategy;
 
-pub type BufferData<B, E = ()> = crate::BufferData<AtomicBool, B, AtomicStrategy, E>;
+pub type BufferData<B, E = ()> = crate::BufferData<AtomicBool, AtomicStrategy, B, E>;
 
 #[cfg(feature = "alloc")]
 pub mod owned {

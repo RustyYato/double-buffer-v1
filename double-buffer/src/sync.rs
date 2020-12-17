@@ -10,7 +10,7 @@ use spin::Mutex;
 #[cfg(feature = "std")]
 pub mod park;
 
-pub type BufferData<B, E = ()> = crate::BufferData<AtomicBool, B, SyncStrategy, E>;
+pub type BufferData<B, E = ()> = crate::BufferData<AtomicBool, SyncStrategy, B, E>;
 
 pub mod owned {
     pub type BufferRef<B, E = ()> = core::pin::Pin<std::sync::Arc<super::BufferData<B, E>>>;

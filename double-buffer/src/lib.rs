@@ -59,9 +59,9 @@ unsafe impl TrustedRadium for core::sync::atomic::AtomicUsize {
 }
 
 pub type BufferRefData<BR> = BufferData<
-    <BR as BufferRef>::RawPtr,
-    <BR as BufferRef>::Buffer,
+    <BR as BufferRef>::Whitch,
     <BR as BufferRef>::Strategy,
+    <BR as BufferRef>::Buffer,
     <BR as BufferRef>::Extra,
 >;
 
@@ -69,7 +69,7 @@ type ReaderTag<BR> = <<BR as BufferRef>::Strategy as Strategy>::ReaderTag;
 type Capture<BR> = <<BR as BufferRef>::Strategy as Strategy>::Capture;
 
 pub unsafe trait BufferRef: Sized {
-    type RawPtr: TrustedRadium<Item = bool>;
+    type Whitch: TrustedRadium<Item = bool>;
     type Buffer;
     type Strategy: Strategy;
     type Extra: ?Sized;
@@ -139,7 +139,7 @@ impl<B> Buffers<B> {
     fn write_buffer(&self, item: bool) -> *mut B { self.get_raw(!item) }
 }
 
-pub struct BufferData<R, B, S, E: ?Sized> {
+pub struct BufferData<R, S, B, E: ?Sized> {
     _pin: PhantomPinned,
     which: R,
     buffers: Buffers<B>,
@@ -179,14 +179,14 @@ pub fn new<B: BufferRef>(buffer_ref: B) -> (Reader<B>, Writer<B>) {
 }
 
 #[derive(Default)]
-pub struct BufferDataBuilder<B, S, E> {
+pub struct BufferDataBuilder<S, B, E> {
     pub buffers: B,
     pub strategy: S,
     pub extra: E,
 }
 
-impl<B, S: Strategy, E> BufferDataBuilder<[B; 2], S, E> {
-    pub fn build<R: TrustedRadium<Item = bool>>(self) -> BufferData<R, B, S, E> {
+impl<B, S: Strategy, E> BufferDataBuilder<S, [B; 2], E> {
+    pub fn build<R: TrustedRadium<Item = bool>>(self) -> BufferData<R, S, B, E> {
         BufferData {
             _pin: PhantomPinned,
             which: R::new(false),
@@ -197,7 +197,7 @@ impl<B, S: Strategy, E> BufferDataBuilder<[B; 2], S, E> {
     }
 }
 
-impl<R, B: Default, S> Default for BufferData<R, B, S, ()>
+impl<R, B: Default, S> Default for BufferData<R, S, B, ()>
 where
     R: TrustedRadium<Item = bool>,
     B: Default,
@@ -207,7 +207,7 @@ where
     fn default() -> Self { BufferDataBuilder::default().build() }
 }
 
-impl<R, B, S> BufferData<R, B, S, ()>
+impl<R, B, S> BufferData<R, S, B, ()>
 where
     R: TrustedRadium<Item = bool>,
     S: Default + Strategy,
@@ -223,7 +223,7 @@ where
     }
 }
 
-impl<R, B, S, E: ?Sized> BufferData<R, B, S, E>
+impl<R, B, S, E: ?Sized> BufferData<R, S, B, E>
 where
     R: TrustedRadium<Item = bool>,
     S: Default + Strategy,
