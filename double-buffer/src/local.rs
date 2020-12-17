@@ -44,6 +44,28 @@ pub struct WriterTag(());
 #[inline(never)]
 fn swap_buffers_fail() -> ! { panic!("Tried to swap buffers of a local-double buffer while readers were reading!") }
 
+#[cold]
+#[inline(never)]
+fn begin_guard_fail<T>() -> T { panic!("Tried to create too many readers!") }
+
+impl LocalStrategy {
+    pub fn try_swap_buffers<B: crate::BufferRef<Strategy = Self>>(writer: &mut crate::Writer<B>) -> bool {
+        use crate::Writer;
+
+        let strategy: &Self = Writer::strategy(writer);
+
+        let can_swap = strategy.num_readers.get() == 0;
+
+        if can_swap {
+            unsafe {
+                Writer::swap_buffers_unchecked(writer);
+            }
+        }
+
+        can_swap
+    }
+}
+
 unsafe impl Strategy for LocalStrategy {
     type ReaderTag = ReaderTag;
     type WriterTag = WriterTag;
@@ -74,12 +96,7 @@ unsafe impl Strategy for LocalStrategy {
     #[inline]
     fn begin_guard(&self, _: &Self::ReaderTag) -> Self::RawGuard {
         let num_readers = &self.num_readers;
-        num_readers.set(
-            num_readers
-                .get()
-                .checked_add(1)
-                .expect("Tried to create too many readers!"),
-        );
+        num_readers.set(num_readers.get().checked_add(1).unwrap_or_else(begin_guard_fail));
         RawGuard(())
     }
 
