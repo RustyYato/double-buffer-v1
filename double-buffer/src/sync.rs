@@ -51,6 +51,7 @@ pub struct ReaderTag(Arc<AtomicU32>);
 pub struct WriterTag(());
 
 unsafe impl Strategy for SyncStrategy {
+    type Whitch = AtomicBool;
     type ReaderTag = ReaderTag;
     type WriterTag = WriterTag;
     type Capture = Capture;

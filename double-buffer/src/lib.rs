@@ -78,19 +78,15 @@ unsafe impl TrustedRadium for core::sync::atomic::AtomicUsize {
     }
 }
 
-pub type BufferRefData<BR> = BufferData<
-    <BR as BufferRef>::Whitch,
-    <BR as BufferRef>::Strategy,
-    <BR as BufferRef>::Buffer,
-    <BR as BufferRef>::Extra,
->;
+pub type BufferRefData<BR> =
+    BufferData<Whitch<BR>, <BR as BufferRef>::Strategy, <BR as BufferRef>::Buffer, <BR as BufferRef>::Extra>;
 
+type Whitch<BR> = <<BR as BufferRef>::Strategy as Strategy>::Whitch;
 type ReaderTag<BR> = <<BR as BufferRef>::Strategy as Strategy>::ReaderTag;
 type WriterTag<BR> = <<BR as BufferRef>::Strategy as Strategy>::WriterTag;
 type Capture<BR> = <<BR as BufferRef>::Strategy as Strategy>::Capture;
 
 pub unsafe trait BufferRef: Sized {
-    type Whitch: TrustedRadium<Item = bool>;
     type Buffer;
     type Strategy: Strategy;
     type Extra: ?Sized;
@@ -109,6 +105,7 @@ pub unsafe trait BufferRef: Sized {
 }
 
 pub unsafe trait Strategy: Sized {
+    type Whitch: TrustedRadium<Item = bool>;
     type ReaderTag;
     type WriterTag;
     type Capture;

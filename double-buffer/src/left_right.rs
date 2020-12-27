@@ -101,7 +101,7 @@ impl crate::op::Operation<Counter> for i64 {
 fn left_right() {
     use crate::raw::BufferDataBuilder;
 
-    let mut buffer_data: crate::sync::BufferData<_, _> = BufferDataBuilder {
+    let mut buffer_data = BufferDataBuilder {
         strategy: crate::sync::SyncStrategy::default(),
         buffers: [Counter(0), Counter(0)],
         extra: (),

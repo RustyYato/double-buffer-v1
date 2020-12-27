@@ -52,6 +52,7 @@ impl ParkStrategy {
 }
 
 unsafe impl Strategy for ParkStrategy {
+    type Whitch = AtomicBool;
     type ReaderTag = ReaderTag;
     type WriterTag = WriterTag;
     type Capture = Capture;

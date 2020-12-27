@@ -10,13 +10,11 @@ use std::{
     sync::{self, Arc},
 };
 
-unsafe impl<'a, W, B, S, E> BufferRef for &'a mut BufferData<W, S, B, E>
+unsafe impl<'a, B, S, E> BufferRef for &'a mut BufferData<S::Whitch, S, B, E>
 where
-    W: TrustedRadium<Item = bool>,
     S: Strategy,
     E: ?Sized,
 {
-    type Whitch = W;
     type Buffer = B;
     type Strategy = S;
     type Extra = E;
@@ -46,13 +44,11 @@ impl<T: ?Sized> Clone for PinnedRcWeak<T> {
 }
 
 #[cfg(feature = "alloc")]
-unsafe impl<W, B, S, E> BufferRef for Rc<BufferData<W, S, B, E>>
+unsafe impl<B, S, E> BufferRef for Rc<BufferData<S::Whitch, S, B, E>>
 where
-    W: TrustedRadium<Item = bool>,
     S: Strategy,
     E: ?Sized,
 {
-    type Whitch = W;
     type Buffer = B;
     type Strategy = S;
     type Extra = E;
@@ -75,14 +71,12 @@ where
 }
 
 #[cfg(feature = "alloc")]
-unsafe impl<W, B, S, E, C> BufferRef for Box<ThinInner<BufferData<W, S, B, E>, C>>
+unsafe impl<B, S, E, C> BufferRef for Box<ThinInner<BufferData<S::Whitch, S, B, E>, C>>
 where
-    W: TrustedRadium<Item = bool>,
     C: TrustedRadium<Item = usize>,
     S: Strategy,
     E: ?Sized,
 {
-    type Whitch = W;
     type Buffer = B;
     type Strategy = S;
     type Extra = E;
@@ -104,13 +98,11 @@ where
 }
 
 #[cfg(feature = "alloc")]
-unsafe impl<W, B, S, E> BufferRef for Arc<BufferData<W, S, B, E>>
+unsafe impl<B, S, E> BufferRef for Arc<BufferData<S::Whitch, S, B, E>>
 where
-    W: TrustedRadium<Item = bool>,
     S: Strategy,
     E: ?Sized,
 {
-    type Whitch = W;
     type Buffer = B;
     type Strategy = S;
     type Extra = E;

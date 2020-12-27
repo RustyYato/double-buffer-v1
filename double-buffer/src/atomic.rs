@@ -40,6 +40,7 @@ pub struct ReaderTag(());
 pub struct WriterTag(());
 
 unsafe impl Strategy for AtomicStrategy {
+    type Whitch = AtomicBool;
     type ReaderTag = ReaderTag;
     type WriterTag = WriterTag;
     type Capture = Capture;

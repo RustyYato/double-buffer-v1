@@ -66,6 +66,7 @@ impl LocalStrategy {
 }
 
 unsafe impl Strategy for LocalStrategy {
+    type Whitch = core::cell::Cell<bool>;
     type ReaderTag = ReaderTag;
     type WriterTag = WriterTag;
     type Capture = Capture;
@@ -97,7 +98,7 @@ unsafe impl Strategy for LocalStrategy {
         let num_readers = &self.num_readers;
         num_readers.set(match num_readers.get().checked_add(1) {
             Some(x) => x,
-            None => begin_guard_fail()
+            None => begin_guard_fail(),
         });
         RawGuard(())
     }

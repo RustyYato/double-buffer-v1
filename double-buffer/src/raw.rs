@@ -140,9 +140,8 @@ where
     }
 }
 
-impl<W, B, S, E: ?Sized> BufferData<W, S, B, E>
+impl<B, S, E: ?Sized> BufferData<S::Whitch, S, B, E>
 where
-    W: TrustedRadium<Item = bool>,
     S: Default + Strategy,
 {
     pub fn split_mut(&mut self) -> (Reader<&mut Self>, Writer<&mut Self>) { new(self) }
