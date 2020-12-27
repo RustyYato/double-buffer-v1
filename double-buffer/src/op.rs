@@ -11,7 +11,7 @@ pub trait Operation<B>: Sized {
 }
 
 pub struct Writer<B: BufferRef, O> {
-    writer: crate::Writer<B>,
+    writer: crate::raw::Writer<B>,
     ops: Vec<O>,
 }
 
@@ -20,9 +20,9 @@ pub struct WriterRef<'a, B: BufferRef, O> {
     ops: &'a mut Vec<O>,
 }
 
-impl<B: BufferRef, O> From<crate::Writer<B>> for Writer<B, O> {
+impl<B: BufferRef, O> From<crate::raw::Writer<B>> for Writer<B, O> {
     #[inline]
-    fn from(writer: crate::Writer<B>) -> Self {
+    fn from(writer: crate::raw::Writer<B>) -> Self {
         Writer {
             writer,
             ops: Vec::new(),
@@ -31,11 +31,11 @@ impl<B: BufferRef, O> From<crate::Writer<B>> for Writer<B, O> {
 }
 
 impl<B: BufferRef, O> Writer<B, O> {
-    pub fn reader(&self) -> crate::Reader<B> { crate::Writer::reader(&self.writer) }
+    pub fn reader(&self) -> crate::raw::Reader<B> { crate::raw::Writer::reader(&self.writer) }
 
-    pub fn read(&self) -> &B::Buffer { crate::Writer::read(&self.writer) }
+    pub fn read(&self) -> &B::Buffer { crate::raw::Writer::read(&self.writer) }
 
-    pub fn extra(&self) -> &B::Extra { crate::Writer::extra(&self.writer) }
+    pub fn extra(&self) -> &B::Extra { crate::raw::Writer::extra(&self.writer) }
 
     #[inline]
     fn as_ref(&mut self) -> WriterRef<'_, B, O> {
@@ -49,7 +49,7 @@ impl<B: BufferRef, O> Writer<B, O> {
 impl<B: BufferRef, O: Operation<B::Buffer>> Writer<B, O> {
     #[inline]
     pub fn split(&mut self) -> (&B::Buffer, WriterRef<'_, B, O>, &B::Extra) {
-        let split = crate::Writer::split_mut(&mut self.writer);
+        let split = crate::raw::Writer::split_mut(&mut self.writer);
         (
             split.read,
             WriterRef {
@@ -68,7 +68,7 @@ impl<B: BufferRef, O: Operation<B::Buffer>> Writer<B, O> {
 
     #[cold]
     fn flush_slow(&mut self) {
-        crate::Writer::swap_buffers(&mut self.writer);
+        crate::raw::Writer::swap_buffers(&mut self.writer);
         let buffer = &mut self.writer as &mut B::Buffer;
         self.ops.drain(..).for_each(|op| op.apply_once(buffer))
     }

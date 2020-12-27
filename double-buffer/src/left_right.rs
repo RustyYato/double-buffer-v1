@@ -1,24 +1,24 @@
-use crate::BufferRef;
+use crate::{raw, BufferRef};
 
 use std::vec::Vec;
 
 use crate::op::Operation;
 
 pub struct Writer<B: BufferRef, O> {
-    writer: crate::Writer<B>,
+    writer: raw::Writer<B>,
     ops: Vec<O>,
     applied: usize,
-    swap: crate::Swap<B>,
+    swap: raw::Swap<B>,
 }
 
 pub struct WriterRef<'a, O> {
     ops: &'a mut Vec<O>,
 }
 
-impl<B: BufferRef, O> From<crate::Writer<B>> for Writer<B, O> {
+impl<B: BufferRef, O> From<crate::raw::Writer<B>> for Writer<B, O> {
     #[inline]
-    fn from(mut writer: crate::Writer<B>) -> Self {
-        let swap = unsafe { crate::Writer::start_buffer_swap(&mut writer) };
+    fn from(mut writer: crate::raw::Writer<B>) -> Self {
+        let swap = unsafe { crate::raw::Writer::start_buffer_swap(&mut writer) };
         Writer {
             writer,
             ops: Vec::new(),
@@ -29,17 +29,17 @@ impl<B: BufferRef, O> From<crate::Writer<B>> for Writer<B, O> {
 }
 
 impl<B: BufferRef, O> Writer<B, O> {
-    pub fn reader(&self) -> crate::Reader<B> { crate::Writer::reader(&self.writer) }
+    pub fn reader(&self) -> crate::raw::Reader<B> { crate::raw::Writer::reader(&self.writer) }
 
-    pub fn read(&self) -> &B::Buffer { crate::Writer::read(&self.writer) }
+    pub fn read(&self) -> &B::Buffer { crate::raw::Writer::read(&self.writer) }
 
-    pub fn extra(&self) -> &B::Extra { crate::Writer::extra(&self.writer) }
+    pub fn extra(&self) -> &B::Extra { crate::raw::Writer::extra(&self.writer) }
 }
 
 impl<B: BufferRef, O: Operation<B::Buffer>> Writer<B, O> {
     #[inline]
     pub fn split(&mut self) -> (&B::Buffer, WriterRef<'_, O>, &B::Extra) {
-        let split = crate::Writer::split_mut(&mut self.writer);
+        let split = crate::raw::Writer::split_mut(&mut self.writer);
         (split.read, WriterRef { ops: &mut self.ops }, split.extra)
     }
 
@@ -51,7 +51,7 @@ impl<B: BufferRef, O: Operation<B::Buffer>> Writer<B, O> {
     pub fn flush(&mut self) {
         use crate::Strategy;
 
-        let strategy = crate::Writer::strategy(&self.writer);
+        let strategy = crate::raw::Writer::strategy(&self.writer);
         while !strategy.is_swap_completed(&mut self.swap) {}
 
         let buffer = &mut *self.writer;
@@ -66,7 +66,7 @@ impl<B: BufferRef, O: Operation<B::Buffer>> Writer<B, O> {
             self.applied += 1;
         }
 
-        self.swap = unsafe { crate::Writer::start_buffer_swap(&mut self.writer) };
+        self.swap = unsafe { crate::raw::Writer::start_buffer_swap(&mut self.writer) };
     }
 
     #[inline]
@@ -92,19 +92,16 @@ impl crate::op::Operation<Counter> for i64 {
 
 #[test]
 fn left_right() {
-    use std::rc::Rc;
+    use crate::raw::BufferDataBuilder;
 
-    use crate::BufferDataBuilder;
-
-    let (mut reader, writer) = crate::new(Rc::new(
-        BufferDataBuilder {
-            strategy: crate::local::LocalStrategy::default(),
-            buffers: [Counter(0), Counter(0)],
-            extra: (),
-        }
-        .build(),
-    ));
-    let writer = crate::local::owned::Writer::from(writer);
+    let mut buffer_data = BufferDataBuilder {
+        strategy: crate::local::LocalStrategy::default(),
+        buffers: [Counter(0), Counter(0)],
+        extra: (),
+    }
+    .build();
+    let (mut reader, writer) = buffer_data.split_mut();
+    let writer = crate::local::reference::Writer::from(writer);
     let mut writer = Writer::from(writer);
 
     writer.apply(10);

@@ -175,7 +175,7 @@ impl<M> Read<M> {
         Q: ?Sized,
         M: RawMapAccess<Q>,
     {
-        db::ReaderGuard::try_map(self.get_map(), move |x, _| x.get(key)).ok()
+        db::raw::ReaderGuard::try_map(self.get_map(), move |x, _| x.get(key)).ok()
     }
 }
 

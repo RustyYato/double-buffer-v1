@@ -7,25 +7,25 @@ pub type BufferData<B, E = ()> = crate::BufferData<core::cell::Cell<bool>, Local
 #[cfg(feature = "alloc")]
 pub mod owned {
     pub type BufferRef<B, E = ()> = std::rc::Rc<super::BufferData<B, E>>;
-    pub type Writer<B, E = ()> = crate::Writer<BufferRef<B, E>>;
-    pub type Reader<B, E = ()> = crate::Reader<BufferRef<B, E>>;
-    pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::ReaderGuard<'reader, BufferRef<B, E>, T>;
+    pub type Writer<B, E = ()> = crate::raw::Writer<BufferRef<B, E>>;
+    pub type Reader<B, E = ()> = crate::raw::Reader<BufferRef<B, E>>;
+    pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::raw::ReaderGuard<'reader, BufferRef<B, E>, T>;
 }
 
 #[cfg(feature = "alloc")]
 pub mod thin {
     pub type BufferRef<B, E = ()> = std::boxed::Box<crate::thin::RcInner<super::BufferData<B, E>>>;
-    pub type Writer<B, E = ()> = crate::Writer<BufferRef<B, E>>;
-    pub type Reader<B, E = ()> = crate::Reader<BufferRef<B, E>>;
-    pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::ReaderGuard<'reader, BufferRef<B, E>, T>;
+    pub type Writer<B, E = ()> = crate::raw::Writer<BufferRef<B, E>>;
+    pub type Reader<B, E = ()> = crate::raw::Reader<BufferRef<B, E>>;
+    pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::raw::ReaderGuard<'reader, BufferRef<B, E>, T>;
 }
 
 pub mod reference {
-    pub type BufferRef<'buf_data, B, E = ()> = core::pin::Pin<&'buf_data mut super::BufferData<B, E>>;
-    pub type Writer<'buf_data, B, E = ()> = crate::Writer<BufferRef<'buf_data, B, E>>;
-    pub type Reader<'buf_data, B, E = ()> = crate::Reader<BufferRef<'buf_data, B, E>>;
+    pub type BufferRef<'buf_data, B, E = ()> = &'buf_data mut super::BufferData<B, E>;
+    pub type Writer<'buf_data, B, E = ()> = crate::raw::Writer<BufferRef<'buf_data, B, E>>;
+    pub type Reader<'buf_data, B, E = ()> = crate::raw::Reader<BufferRef<'buf_data, B, E>>;
     pub type ReaderGuard<'reader, 'buf_data, B, T = B, E = ()> =
-        crate::ReaderGuard<'reader, BufferRef<'buf_data, B, E>, T>;
+        crate::raw::ReaderGuard<'reader, BufferRef<'buf_data, B, E>, T>;
 }
 
 #[derive(Default)]
@@ -37,7 +37,6 @@ pub struct RawGuard(());
 pub struct Capture(());
 
 pub struct ReaderTag(());
-#[derive(Clone, Copy)]
 pub struct WriterTag(());
 
 #[cold]
@@ -49,8 +48,8 @@ fn swap_buffers_fail() -> ! { panic!("Tried to swap buffers of a local-double bu
 fn begin_guard_fail<T>() -> T { panic!("Tried to create too many readers!") }
 
 impl LocalStrategy {
-    pub fn try_swap_buffers<B: crate::BufferRef<Strategy = Self>>(writer: &mut crate::Writer<B>) -> bool {
-        use crate::Writer;
+    pub fn try_swap_buffers<B: crate::BufferRef<Strategy = Self>>(writer: &mut crate::raw::Writer<B>) -> bool {
+        use crate::raw::Writer;
 
         let strategy: &Self = Writer::strategy(writer);
 
@@ -79,10 +78,10 @@ unsafe impl Strategy for LocalStrategy {
     unsafe fn writer_tag(&self) -> Self::WriterTag { WriterTag(()) }
 
     #[inline]
-    fn fence(&self, _: Self::WriterTag) {}
+    fn fence(&self) {}
 
     #[inline]
-    fn capture_readers(&self, _: Self::WriterTag) -> Self::Capture {
+    fn capture_readers(&self, _: &mut Self::WriterTag) -> Self::Capture {
         if self.num_readers.get() != 0 {
             swap_buffers_fail()
         }
@@ -91,12 +90,15 @@ unsafe impl Strategy for LocalStrategy {
     }
 
     #[inline]
-    fn is_capture_complete(&self, _: &mut Self::Capture, _: Self::WriterTag) -> bool { true }
+    fn is_capture_complete(&self, _: &mut Self::Capture) -> bool { true }
 
     #[inline]
     fn begin_guard(&self, _: &mut Self::ReaderTag) -> Self::RawGuard {
         let num_readers = &self.num_readers;
-        num_readers.set(num_readers.get().checked_add(1).unwrap_or_else(begin_guard_fail));
+        num_readers.set(match num_readers.get().checked_add(1) {
+            Some(x) => x,
+            None => begin_guard_fail()
+        });
         RawGuard(())
     }
 

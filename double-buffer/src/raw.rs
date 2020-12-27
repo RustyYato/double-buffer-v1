@@ -1,16 +1,14 @@
 use core::{
     cell::UnsafeCell,
-    marker::PhantomPinned,
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
-    pin::Pin,
     sync::atomic::Ordering,
 };
 
 use crate::*;
 
 pub struct Writer<B: BufferRef> {
-    inner: Pin<B::Strong>,
+    inner: B::Strong,
     tag: WriterTag<B>,
 }
 
@@ -26,7 +24,7 @@ pub struct ReaderGuard<'reader, B: BufferRef, T: ?Sized = <B as BufferRef>::Buff
 
 pub struct RawGuard<B: BufferRef> {
     raw: ManuallyDrop<<B::Strategy as Strategy>::RawGuard>,
-    keep_alive: Pin<B::Strong>,
+    keep_alive: B::Strong,
 }
 
 impl<B: BufferRef> Drop for RawGuard<B> {
@@ -36,7 +34,6 @@ impl<B: BufferRef> Drop for RawGuard<B> {
 pub struct Buffers<B>(UnsafeCell<[B; 2]>);
 
 pub struct BufferData<W, S, B, E: ?Sized> {
-    _pin: PhantomPinned,
     which: W,
     pub buffers: Buffers<B>,
     pub strategy: S,
@@ -45,7 +42,6 @@ pub struct BufferData<W, S, B, E: ?Sized> {
 
 pub struct Swap<B: BufferRef> {
     capture: Capture<B>,
-    tag: WriterTag<B>,
 }
 
 #[non_exhaustive]
@@ -110,7 +106,6 @@ impl<B> Buffers<B> {
 impl<B, S: Strategy, E> BufferDataBuilder<S, B, E> {
     pub fn build<W: TrustedRadium<Item = bool>>(self) -> BufferData<W, S, B, E> {
         BufferData {
-            _pin: PhantomPinned,
             which: W::new(false),
             buffers: Buffers(UnsafeCell::new(self.buffers)),
             strategy: self.strategy,
@@ -150,7 +145,7 @@ where
     W: TrustedRadium<Item = bool>,
     S: Default + Strategy,
 {
-    pub fn split_mut(self: Pin<&mut Self>) -> (Reader<Pin<&mut Self>>, Writer<Pin<&mut Self>>) { new(self) }
+    pub fn split_mut(&mut self) -> (Reader<&mut Self>, Writer<&mut Self>) { new(self) }
 }
 
 struct FinishSwapOnDrop<'a, B: BufferRef> {
@@ -160,7 +155,7 @@ struct FinishSwapOnDrop<'a, B: BufferRef> {
 }
 
 pub(super) fn is_swap_completed<B: BufferRef>(strategy: &B::Strategy, swap: &mut Swap<B>) -> bool {
-    strategy.is_capture_complete(&mut swap.capture, swap.tag)
+    strategy.is_capture_complete(&mut swap.capture)
 }
 
 impl<B: BufferRef> Drop for FinishSwapOnDrop<'_, B> {
@@ -237,39 +232,29 @@ impl<B: BufferRef> Writer<B> {
         }
     }
 
-    pub fn swap_buffers_with<F: FnMut(Split<'_, B>)>(this: &mut Self, f: F) {
+    pub fn swap_buffers_with<F: FnMut(Split<B>)>(this: &mut Self, mut f: F) {
         let swap = unsafe { Self::start_buffer_swap(this) };
-
+        let split = Self::split(this);
+        let f = move || f(split);
         Self::finish_swap_with(this, swap, f)
     }
 
     pub unsafe fn swap_buffers_unchecked(this: &mut Self) { this.inner.which.fetch_xor(true, Ordering::Release); }
 
     #[inline]
-    pub unsafe fn start_buffer_swap(this: &mut Self) -> Swap<B> { Self::split_start_buffer_swap(this).0 }
-
-    #[inline]
-    pub unsafe fn split_start_buffer_swap(this: &mut Self) -> (Swap<B>, Split<'_, B>) {
+    pub unsafe fn start_buffer_swap(this: &mut Self) -> Swap<B> {
         let inner = &*this.inner;
-        inner.strategy.fence(this.tag);
+        inner.strategy.fence();
 
         // `fetch_not` == `fetch_xor(true)`
-        let which = inner.which.fetch_xor(true, Ordering::Release);
-        let which = !which;
+        inner.which.fetch_xor(true, Ordering::Release);
 
-        let capture = inner.strategy.capture_readers(this.tag);
-        let read = inner.buffers.read_buffer(which);
-        let write = inner.buffers.write_buffer(which);
-        let extra = &inner.extra;
+        let capture = inner.strategy.capture_readers(&mut this.tag);
 
-        (Swap { capture, tag: this.tag }, Split {
-            read: &*read,
-            write: &*write,
-            extra,
-        })
+        Swap { capture }
     }
 
-    pub fn finish_swap(this: &mut Self, swap: Swap<B>) {
+    pub fn finish_swap(this: &Self, swap: Swap<B>) {
         let mut on_drop = FinishSwapOnDrop {
             strategy: &this.inner.strategy,
             swap,
@@ -287,10 +272,12 @@ impl<B: BufferRef> Writer<B> {
             snooze(&backoff)
         }
 
+        strategy.fence();
+
         core::mem::forget(on_drop);
     }
 
-    pub fn finish_swap_with<F: FnMut(Split<B>)>(this: &mut Self, swap: Swap<B>, ref mut f: F) {
+    pub fn finish_swap_with<F: FnMut()>(this: &Self, swap: Swap<B>, ref mut f: F) {
         #[cold]
         #[inline(never)]
         fn cold(f: &mut dyn FnMut()) { f() }
@@ -307,18 +294,12 @@ impl<B: BufferRef> Writer<B> {
                 cold(f)
             }
 
+            strategy.fence();
+
             core::mem::forget(on_drop)
         }
 
-        let split = Self::split(this);
-
-        let mut f = move || f(split);
-        finish_swap_with(&this.inner.strategy, swap, &mut f)
-    }
-
-    #[inline]
-    pub fn get_pinned_write_buffer(this: Pin<&mut Self>) -> Pin<&mut B::Buffer> {
-        unsafe { Pin::new_unchecked(Pin::into_inner_unchecked(this) as &mut B::Buffer) }
+        finish_swap_with(&this.inner.strategy, swap, f)
     }
 }
 
@@ -399,6 +380,15 @@ impl<'a, B: BufferRef> RawGuard<B> {
 
     #[inline]
     pub fn extra(&self) -> &B::Extra { &self.keep_alive.extra }
+}
+
+impl<B: BufferRef<UpgradeError = core::convert::Infallible>> Clone for Reader<B> {
+    fn clone(&self) -> Self {
+        match self.try_clone() {
+            Ok(reader) => reader,
+            Err(infallible) => match infallible {},
+        }
+    }
 }
 
 impl<B: BufferRef> Deref for Writer<B> {

@@ -1,7 +1,7 @@
 use super::{BufferData, BufferRef, BufferRefData, Strategy, TrustedRadium};
 #[cfg(feature = "alloc")]
 use crate::thin::{Thin, ThinInner};
-use core::{convert::Infallible, pin::Pin};
+use core::convert::Infallible;
 
 #[cfg(feature = "alloc")]
 use std::{
@@ -10,7 +10,7 @@ use std::{
     sync::{self, Arc},
 };
 
-unsafe impl<'a, W, B, S, E> BufferRef for Pin<&'a mut BufferData<W, S, B, E>>
+unsafe impl<'a, W, B, S, E> BufferRef for &'a mut BufferData<W, S, B, E>
 where
     W: TrustedRadium<Item = bool>,
     S: Strategy,
@@ -23,18 +23,15 @@ where
     type UpgradeError = Infallible;
 
     type Strong = &'a BufferRefData<Self>;
-    type Weak = Pin<&'a BufferRefData<Self>>;
+    type Weak = &'a BufferRefData<Self>;
 
-    fn split(self) -> (Pin<Self::Strong>, Self::Weak) {
-        let buffer_data = self.into_ref();
-        (buffer_data, buffer_data)
-    }
+    fn split(self) -> (Self::Strong, Self::Weak) { (self, self) }
 
     fn is_dangling(_: &Self::Weak) -> bool { false }
 
-    fn upgrade(weak: &Self::Weak) -> Result<Pin<Self::Strong>, Self::UpgradeError> { Ok(*weak) }
+    fn upgrade(weak: &Self::Weak) -> Result<Self::Strong, Self::UpgradeError> { Ok(*weak) }
 
-    fn downgrade(strong: &Pin<Self::Strong>) -> Self::Weak { *strong }
+    fn downgrade(strong: &Self::Strong) -> Self::Weak { *strong }
 }
 
 #[derive(Debug)]
@@ -62,26 +59,19 @@ where
     type UpgradeError = UpgradeFailed;
 
     type Strong = Rc<BufferRefData<Self>>;
-    type Weak = PinnedRcWeak<BufferRefData<Self>>;
+    type Weak = rc::Weak<BufferRefData<Self>>;
 
-    fn split(mut self) -> (Pin<Self::Strong>, Self::Weak) {
-        unsafe {
-            assert!(Rc::get_mut(&mut self).is_some(), "Tried to split a shared `Rc`!");
-            let weak = Rc::downgrade(&self);
-            (Pin::new_unchecked(self), PinnedRcWeak(weak))
-        }
+    fn split(mut self) -> (Self::Strong, Self::Weak) {
+        assert!(Rc::get_mut(&mut self).is_some(), "Tried to split a shared `Rc`!");
+        let weak = Rc::downgrade(&self);
+        (self, weak)
     }
 
-    fn is_dangling(weak: &Self::Weak) -> bool { rc::Weak::strong_count(&weak.0) == 0 }
+    fn is_dangling(weak: &Self::Weak) -> bool { rc::Weak::strong_count(&weak) == 0 }
 
-    fn upgrade(weak: &Self::Weak) -> Result<Pin<Self::Strong>, Self::UpgradeError> {
-        Ok(unsafe { Pin::new_unchecked(weak.0.upgrade().ok_or(UpgradeFailed)?) })
-    }
+    fn upgrade(weak: &Self::Weak) -> Result<Self::Strong, Self::UpgradeError> { weak.upgrade().ok_or(UpgradeFailed) }
 
-    fn downgrade(strong: &Pin<Self::Strong>) -> Self::Weak {
-        let strong = unsafe { core::mem::transmute::<&Pin<Self::Strong>, &Self::Strong>(strong) };
-        PinnedRcWeak(Rc::downgrade(strong))
-    }
+    fn downgrade(strong: &Self::Strong) -> Self::Weak { Rc::downgrade(strong) }
 }
 
 #[cfg(feature = "alloc")]
@@ -99,27 +89,18 @@ where
     type UpgradeError = Infallible;
 
     type Strong = Thin<BufferRefData<Self>, C>;
-    type Weak = Pin<Thin<BufferRefData<Self>, C>>;
+    type Weak = Thin<BufferRefData<Self>, C>;
 
-    fn split(self) -> (Pin<Self::Strong>, Self::Weak) {
-        unsafe {
-            let this = Thin::from(self);
-            (Pin::new_unchecked(Thin::clone(&this)), Pin::new_unchecked(this))
-        }
+    fn split(self) -> (Self::Strong, Self::Weak) {
+        let this = Thin::from(self);
+        (Thin::clone(&this), this)
     }
 
     fn is_dangling(_: &Self::Weak) -> bool { false }
 
-    fn upgrade(weak: &Self::Weak) -> Result<Pin<Self::Strong>, Self::UpgradeError> { Ok(Pin::clone(weak)) }
+    fn upgrade(weak: &Self::Weak) -> Result<Self::Strong, Self::UpgradeError> { Ok(Thin::clone(weak)) }
 
-    fn downgrade(strong: &Pin<Self::Strong>) -> Self::Weak { strong.clone() }
-}
-
-#[cfg(feature = "alloc")]
-pub struct PinnedArcWeak<T: ?Sized>(sync::Weak<T>);
-#[cfg(feature = "alloc")]
-impl<T: ?Sized> Clone for PinnedArcWeak<T> {
-    fn clone(&self) -> Self { Self(self.0.clone()) }
+    fn downgrade(strong: &Self::Strong) -> Self::Weak { strong.clone() }
 }
 
 #[cfg(feature = "alloc")]
@@ -136,25 +117,17 @@ where
     type UpgradeError = UpgradeFailed;
 
     type Strong = Arc<BufferRefData<Self>>;
-    type Weak = PinnedArcWeak<BufferRefData<Self>>;
+    type Weak = sync::Weak<BufferRefData<Self>>;
 
-    fn split(self) -> (Pin<Self::Strong>, Self::Weak) {
-        unsafe {
-            let mut this = self;
-            assert!(Arc::get_mut(&mut this).is_some(), "Tried to split a shared `Arc`!");
-            let weak = Arc::downgrade(&this);
-            (Pin::new_unchecked(this), PinnedArcWeak(weak))
-        }
+    fn split(mut self) -> (Self::Strong, Self::Weak) {
+        assert!(Arc::get_mut(&mut self).is_some(), "Tried to split a shared `Arc`!");
+        let weak = Arc::downgrade(&self);
+        (self, weak)
     }
 
-    fn is_dangling(weak: &Self::Weak) -> bool { sync::Weak::strong_count(&weak.0) == 0 }
+    fn is_dangling(weak: &Self::Weak) -> bool { sync::Weak::strong_count(&weak) == 0 }
 
-    fn upgrade(weak: &Self::Weak) -> Result<Pin<Self::Strong>, Self::UpgradeError> {
-        Ok(unsafe { Pin::new_unchecked(weak.0.upgrade().ok_or(UpgradeFailed)?) })
-    }
+    fn upgrade(weak: &Self::Weak) -> Result<Self::Strong, Self::UpgradeError> { weak.upgrade().ok_or(UpgradeFailed) }
 
-    fn downgrade(strong: &Pin<Self::Strong>) -> Self::Weak {
-        let strong = unsafe { core::mem::transmute::<&Pin<Self::Strong>, &Self::Strong>(strong) };
-        PinnedArcWeak(Arc::downgrade(strong))
-    }
+    fn downgrade(strong: &Self::Strong) -> Self::Weak { Arc::downgrade(strong) }
 }

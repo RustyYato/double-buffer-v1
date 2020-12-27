@@ -14,24 +14,24 @@ pub type BufferData<B, E = ()> = crate::BufferData<AtomicBool, SyncStrategy, B, 
 
 pub mod owned {
     pub type BufferRef<B, E = ()> = std::sync::Arc<super::BufferData<B, E>>;
-    pub type Writer<B, E = ()> = crate::Writer<BufferRef<B, E>>;
-    pub type Reader<B, E = ()> = crate::Reader<BufferRef<B, E>>;
-    pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::ReaderGuard<'reader, BufferRef<B, E>, T>;
+    pub type Writer<B, E = ()> = crate::raw::Writer<BufferRef<B, E>>;
+    pub type Reader<B, E = ()> = crate::raw::Reader<BufferRef<B, E>>;
+    pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::raw::ReaderGuard<'reader, BufferRef<B, E>, T>;
 }
 
 pub mod thin {
     pub type BufferRef<B, E = ()> = std::boxed::Box<crate::thin::ArcInner<super::BufferData<B, E>>>;
-    pub type Writer<B, E = ()> = crate::Writer<BufferRef<B, E>>;
-    pub type Reader<B, E = ()> = crate::Reader<BufferRef<B, E>>;
-    pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::ReaderGuard<'reader, BufferRef<B, E>, T>;
+    pub type Writer<B, E = ()> = crate::raw::Writer<BufferRef<B, E>>;
+    pub type Reader<B, E = ()> = crate::raw::Reader<BufferRef<B, E>>;
+    pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::raw::ReaderGuard<'reader, BufferRef<B, E>, T>;
 }
 
 pub mod reference {
-    pub type BufferRef<'buf_data, B, E = ()> = core::pin::Pin<&'buf_data mut super::BufferData<B, E>>;
-    pub type Writer<'buf_data, B, E = ()> = crate::Writer<BufferRef<'buf_data, B, E>>;
-    pub type Reader<'buf_data, B, E = ()> = crate::Reader<BufferRef<'buf_data, B, E>>;
+    pub type BufferRef<'buf_data, B, E = ()> = &'buf_data mut super::BufferData<B, E>;
+    pub type Writer<'buf_data, B, E = ()> = crate::raw::Writer<BufferRef<'buf_data, B, E>>;
+    pub type Reader<'buf_data, B, E = ()> = crate::raw::Reader<BufferRef<'buf_data, B, E>>;
     pub type ReaderGuard<'reader, 'buf_data, B, T = B, E = ()> =
-        crate::ReaderGuard<'reader, BufferRef<'buf_data, B, E>, T>;
+        crate::raw::ReaderGuard<'reader, BufferRef<'buf_data, B, E>, T>;
 }
 
 #[derive(Default)]
@@ -48,7 +48,6 @@ pub struct Capture {
 }
 
 pub struct ReaderTag(Arc<AtomicU32>);
-#[derive(Clone, Copy)]
 pub struct WriterTag(());
 
 unsafe impl Strategy for SyncStrategy {
@@ -68,10 +67,10 @@ unsafe impl Strategy for SyncStrategy {
     unsafe fn writer_tag(&self) -> Self::WriterTag { WriterTag(()) }
 
     #[inline]
-    fn fence(&self, _: Self::WriterTag) { core::sync::atomic::fence(Ordering::SeqCst); }
+    fn fence(&self) { core::sync::atomic::fence(Ordering::SeqCst); }
 
     #[inline]
-    fn capture_readers(&self, _: Self::WriterTag) -> Self::Capture {
+    fn capture_readers(&self, _: &mut Self::WriterTag) -> Self::Capture {
         let mut active = SmallVec::new();
 
         self.tag_list.lock().retain(|tag| {
@@ -88,7 +87,7 @@ unsafe impl Strategy for SyncStrategy {
     }
 
     #[inline]
-    fn is_capture_complete(&self, capture: &mut Self::Capture, _: Self::WriterTag) -> bool {
+    fn is_capture_complete(&self, capture: &mut Self::Capture) -> bool {
         capture.active.retain(|tag| tag.load(Ordering::Relaxed) & 1 == 1);
 
         capture.active.is_empty()
