@@ -7,6 +7,9 @@ extern crate alloc as std;
 pub mod op;
 
 #[cfg(feature = "alloc")]
+pub mod left_right;
+
+#[cfg(feature = "alloc")]
 pub mod thin;
 
 mod raw;
