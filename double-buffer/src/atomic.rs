@@ -55,10 +55,20 @@ unsafe impl Strategy for AtomicStrategy {
     fn fence(&self) {}
 
     #[inline]
-    fn capture_readers(&self, _: &mut Self::WriterTag) -> Self::Capture { Capture(()) }
+    fn capture_readers(&self, _: &mut Self::WriterTag) -> Self::Capture {
+        use crossbeam_utils::Backoff;
+
+        let backoff = Backoff::new();
+
+        while self.num_readers.load(Ordering::Relaxed) != 0 {
+            backoff.snooze()
+        }
+
+        Capture(())
+    }
 
     #[inline]
-    fn is_capture_complete(&self, _: &mut Self::Capture) -> bool { self.num_readers.load(Ordering::Acquire) == 0 }
+    fn is_capture_complete(&self, _: &mut Self::Capture) -> bool { true }
 
     fn begin_guard(&self, _: &mut Self::ReaderTag) -> Self::RawGuard {
         #[cold]
