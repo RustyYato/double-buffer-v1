@@ -1,5 +1,5 @@
 use crate::TrustedRadium;
-use core::{pin::Pin, sync::atomic::Ordering};
+use core::{convert::TryFrom, mem::ManuallyDrop, pin::Pin, sync::atomic::Ordering};
 use std::boxed::Box;
 
 pub type Rc<T> = Thin<T, core::cell::Cell<usize>>;
@@ -27,6 +27,8 @@ impl<T, S: TrustedRadium<Item = usize>> ThinInner<T, S> {
             value,
         }
     }
+
+    pub fn into_inner(self) -> T { self.value }
 }
 
 impl<T, S: TrustedRadium<Item = usize>> From<ThinInner<T, S>> for Thin<T, S> {
@@ -40,6 +42,33 @@ impl<T: ?Sized, S: TrustedRadium<Item = usize>> From<Box<ThinInner<T, S>>> for T
 impl<T: ?Sized, S: TrustedRadium<Item = usize>> From<Pin<Box<ThinInner<T, S>>>> for Pin<Thin<T, S>> {
     fn from(bx: Pin<Box<ThinInner<T, S>>>) -> Self {
         unsafe { Pin::new_unchecked(Pin::into_inner_unchecked(bx).into()) }
+    }
+}
+
+impl<T: ?Sized, S: TrustedRadium<Item = usize>> TryFrom<Thin<T, S>> for Box<ThinInner<T, S>> {
+    type Error = Thin<T, S>;
+
+    fn try_from(thin: Thin<T, S>) -> Result<Self, Self::Error> {
+        if thin.strong().load(Ordering::Relaxed) == 1 {
+            let thin = ManuallyDrop::new(thin);
+            Ok(unsafe { Box::from_raw(thin.ptr) })
+        } else {
+            Err(thin)
+        }
+    }
+}
+
+impl<T: ?Sized, S: TrustedRadium<Item = usize>> TryFrom<Pin<Thin<T, S>>> for Pin<Box<ThinInner<T, S>>> {
+    type Error = Pin<Thin<T, S>>;
+
+    fn try_from(thin: Pin<Thin<T, S>>) -> Result<Self, Self::Error> {
+        unsafe {
+            use core::convert::TryInto;
+            match Pin::into_inner_unchecked(thin).try_into() {
+                Ok(bx) => Ok(Pin::new_unchecked(bx)),
+                Err(thin) => Err(Pin::new_unchecked(thin)),
+            }
+        }
     }
 }
 
