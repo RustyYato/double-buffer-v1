@@ -43,8 +43,11 @@ unsafe impl Strategy for AtomicStrategy {
     type Whitch = AtomicBool;
     type ReaderTag = ReaderTag;
     type WriterTag = WriterTag;
-    type Capture = Capture;
     type RawGuard = RawGuard;
+
+    type FastCapture = ();
+    type CaptureError = core::convert::Infallible;
+    type Capture = Capture;
 
     #[inline]
     unsafe fn reader_tag(&self) -> Self::ReaderTag { ReaderTag(()) }
@@ -53,10 +56,10 @@ unsafe impl Strategy for AtomicStrategy {
     unsafe fn writer_tag(&self) -> Self::WriterTag { WriterTag(()) }
 
     #[inline]
-    fn fence(&self) {}
+    fn try_capture_readers(&self, _: &mut Self::WriterTag) -> Result<Self::FastCapture, Self::CaptureError> { Ok(()) }
 
     #[inline]
-    fn capture_readers(&self, _: &mut Self::WriterTag) -> Self::Capture {
+    fn finish_capture_readers(&self, _: &mut Self::WriterTag, (): Self::FastCapture) -> Self::Capture {
         use crossbeam_utils::Backoff;
 
         let backoff = Backoff::new();
@@ -68,8 +71,7 @@ unsafe impl Strategy for AtomicStrategy {
         Capture(())
     }
 
-    #[inline]
-    fn is_capture_complete(&self, _: &mut Self::Capture) -> bool { true }
+    fn readers_have_exited(&self, _: &mut Self::Capture) -> bool { true }
 
     fn begin_guard(&self, _: &mut Self::ReaderTag) -> Self::RawGuard {
         #[cold]

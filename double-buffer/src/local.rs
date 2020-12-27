@@ -39,9 +39,13 @@ pub struct Capture(());
 pub struct ReaderTag(());
 pub struct WriterTag(());
 
-#[cold]
-#[inline(never)]
-fn swap_buffers_fail() -> ! { panic!("Tried to swap buffers of a local-double buffer while readers were reading!") }
+pub struct CaptureError;
+
+impl core::fmt::Debug for CaptureError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "Tried to start a swap while there are readers active")
+    }
+}
 
 #[cold]
 #[inline(never)]
@@ -69,8 +73,11 @@ unsafe impl Strategy for LocalStrategy {
     type Whitch = core::cell::Cell<bool>;
     type ReaderTag = ReaderTag;
     type WriterTag = WriterTag;
-    type Capture = Capture;
     type RawGuard = RawGuard;
+
+    type FastCapture = Capture;
+    type CaptureError = CaptureError;
+    type Capture = Capture;
 
     #[inline]
     unsafe fn reader_tag(&self) -> Self::ReaderTag { ReaderTag(()) }
@@ -79,19 +86,19 @@ unsafe impl Strategy for LocalStrategy {
     unsafe fn writer_tag(&self) -> Self::WriterTag { WriterTag(()) }
 
     #[inline]
-    fn fence(&self) {}
-
-    #[inline]
-    fn capture_readers(&self, _: &mut Self::WriterTag) -> Self::Capture {
-        if self.num_readers.get() != 0 {
-            swap_buffers_fail()
+    fn try_capture_readers(&self, _: &mut Self::WriterTag) -> Result<Self::FastCapture, Self::CaptureError> {
+        if self.num_readers.get() == 0 {
+            Ok(Capture(()))
+        } else {
+            Err(CaptureError)
         }
-
-        Capture(())
     }
 
     #[inline]
-    fn is_capture_complete(&self, _: &mut Self::Capture) -> bool { true }
+    fn finish_capture_readers(&self, _: &mut Self::WriterTag, capture: Self::FastCapture) -> Self::Capture { capture }
+
+    #[inline]
+    fn readers_have_exited(&self, _: &mut Self::Capture) -> bool { true }
 
     #[inline]
     fn begin_guard(&self, _: &mut Self::ReaderTag) -> Self::RawGuard {

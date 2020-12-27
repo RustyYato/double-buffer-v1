@@ -54,8 +54,11 @@ unsafe impl Strategy for SyncStrategy {
     type Whitch = AtomicBool;
     type ReaderTag = ReaderTag;
     type WriterTag = WriterTag;
-    type Capture = Capture;
     type RawGuard = RawGuard;
+
+    type FastCapture = ();
+    type CaptureError = core::convert::Infallible;
+    type Capture = Capture;
 
     #[inline]
     unsafe fn reader_tag(&self) -> Self::ReaderTag {
@@ -68,10 +71,13 @@ unsafe impl Strategy for SyncStrategy {
     unsafe fn writer_tag(&self) -> Self::WriterTag { WriterTag(()) }
 
     #[inline]
-    fn fence(&self) { core::sync::atomic::fence(Ordering::SeqCst); }
+    fn try_capture_readers(&self, _: &mut Self::WriterTag) -> Result<Self::FastCapture, Self::CaptureError> {
+        core::sync::atomic::fence(Ordering::SeqCst);
+        Ok(())
+    }
 
     #[inline]
-    fn capture_readers(&self, _: &mut Self::WriterTag) -> Self::Capture {
+    fn finish_capture_readers(&self, _: &mut Self::WriterTag, (): Self::FastCapture) -> Self::Capture {
         let mut active = SmallVec::new();
 
         self.tag_list.lock().retain(|tag| {
@@ -88,10 +94,16 @@ unsafe impl Strategy for SyncStrategy {
     }
 
     #[inline]
-    fn is_capture_complete(&self, capture: &mut Self::Capture) -> bool {
+    fn readers_have_exited(&self, capture: &mut Self::Capture) -> bool {
         capture.active.retain(|tag| tag.load(Ordering::Relaxed) & 1 == 1);
 
-        capture.active.is_empty()
+        let readers_have_exited = capture.active.is_empty();
+
+        if readers_have_exited {
+            core::sync::atomic::fence(Ordering::SeqCst);
+        }
+
+        readers_have_exited
     }
 
     #[inline]

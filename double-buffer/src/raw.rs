@@ -154,7 +154,13 @@ struct FinishSwapOnDrop<'a, B: BufferRef> {
 }
 
 pub(super) fn is_swap_completed<B: BufferRef>(strategy: &B::Strategy, swap: &mut Swap<B>) -> bool {
-    strategy.is_capture_complete(&mut swap.capture)
+    strategy.readers_have_exited(&mut swap.capture)
+}
+
+#[cold]
+#[inline(never)]
+fn swap_buffers_fail(error: &dyn core::fmt::Debug) -> ! {
+    panic!("Tried to swap buffers while readers were reading! {:?}", error)
 }
 
 impl<B: BufferRef> Drop for FinishSwapOnDrop<'_, B> {
@@ -227,7 +233,7 @@ impl<B: BufferRef> Writer<B> {
     pub fn swap_buffers(this: &mut Self) {
         unsafe {
             let swap = Self::start_buffer_swap(this);
-            Self::finish_swap(this, swap)
+            Self::finish_swap(this, swap);
         }
     }
 
@@ -235,22 +241,26 @@ impl<B: BufferRef> Writer<B> {
         let swap = unsafe { Self::start_buffer_swap(this) };
         let split = Self::split(this);
         let f = move || f(split);
-        Self::finish_swap_with(this, swap, f)
+        Self::finish_swap_with(this, swap, f);
     }
 
     pub unsafe fn swap_buffers_unchecked(this: &mut Self) { this.inner.which.fetch_xor(true, Ordering::Release); }
 
     #[inline]
     pub unsafe fn start_buffer_swap(this: &mut Self) -> Swap<B> {
-        let inner = &*this.inner;
-        inner.strategy.fence();
+        match Self::try_start_buffer_swap(this) {
+            Ok(swap) => swap,
+            Err(ref error) => swap_buffers_fail(error),
+        }
+    }
 
-        // `fetch_not` == `fetch_xor(true)`
-        inner.which.fetch_xor(true, Ordering::Release);
+    #[inline]
+    pub unsafe fn try_start_buffer_swap(this: &mut Self) -> Result<Swap<B>, CaptureError<B>> {
+        let capture = this.inner.strategy.try_capture_readers(&mut this.tag)?;
+        Self::swap_buffers(this);
+        let capture = this.inner.strategy.finish_capture_readers(&mut this.tag, capture);
 
-        let capture = inner.strategy.capture_readers(&mut this.tag);
-
-        Swap { capture }
+        Ok(Swap { capture })
     }
 
     pub fn finish_swap(this: &Self, swap: Swap<B>) {
@@ -271,8 +281,6 @@ impl<B: BufferRef> Writer<B> {
             snooze(&backoff)
         }
 
-        strategy.fence();
-
         core::mem::forget(on_drop);
     }
 
@@ -292,8 +300,6 @@ impl<B: BufferRef> Writer<B> {
             while !strategy.is_swap_completed(swap) {
                 cold(f)
             }
-
-            strategy.fence();
 
             core::mem::forget(on_drop)
         }

@@ -84,6 +84,7 @@ pub type BufferRefData<BR> =
 type Whitch<BR> = <<BR as BufferRef>::Strategy as Strategy>::Whitch;
 type ReaderTag<BR> = <<BR as BufferRef>::Strategy as Strategy>::ReaderTag;
 type WriterTag<BR> = <<BR as BufferRef>::Strategy as Strategy>::WriterTag;
+type CaptureError<BR> = <<BR as BufferRef>::Strategy as Strategy>::CaptureError;
 type Capture<BR> = <<BR as BufferRef>::Strategy as Strategy>::Capture;
 
 pub unsafe trait BufferRef: Sized {
@@ -108,18 +109,21 @@ pub unsafe trait Strategy: Sized {
     type Whitch: TrustedRadium<Item = bool>;
     type ReaderTag;
     type WriterTag;
-    type Capture;
     type RawGuard;
+
+    type FastCapture;
+    type CaptureError: core::fmt::Debug;
+    type Capture;
 
     unsafe fn reader_tag(&self) -> Self::ReaderTag;
 
     unsafe fn writer_tag(&self) -> Self::WriterTag;
 
-    fn fence(&self);
+    fn try_capture_readers(&self, tag: &mut Self::WriterTag) -> Result<Self::FastCapture, Self::CaptureError>;
 
-    fn capture_readers(&self, tag: &mut Self::WriterTag) -> Self::Capture;
+    fn finish_capture_readers(&self, _: &mut Self::WriterTag, capture: Self::FastCapture) -> Self::Capture;
 
-    fn is_capture_complete(&self, capture: &mut Self::Capture) -> bool;
+    fn readers_have_exited(&self, capture: &mut Self::Capture) -> bool;
 
     fn begin_guard(&self, tag: &mut Self::ReaderTag) -> Self::RawGuard;
 

@@ -55,8 +55,11 @@ unsafe impl Strategy for ParkStrategy {
     type Whitch = AtomicBool;
     type ReaderTag = ReaderTag;
     type WriterTag = WriterTag;
-    type Capture = Capture;
     type RawGuard = RawGuard;
+
+    type FastCapture = ();
+    type CaptureError = core::convert::Infallible;
+    type Capture = Capture;
 
     #[inline]
     unsafe fn reader_tag(&self) -> Self::ReaderTag { ReaderTag(self.raw.reader_tag()) }
@@ -65,18 +68,23 @@ unsafe impl Strategy for ParkStrategy {
     unsafe fn writer_tag(&self) -> Self::WriterTag { WriterTag(self.raw.writer_tag()) }
 
     #[inline]
-    fn fence(&self) { self.raw.fence() }
+    fn try_capture_readers(
+        &self,
+        WriterTag(tag): &mut Self::WriterTag,
+    ) -> Result<Self::FastCapture, Self::CaptureError> {
+        self.raw.try_capture_readers(tag)
+    }
 
     #[inline]
-    fn capture_readers(&self, WriterTag(tag): &mut Self::WriterTag) -> Self::Capture {
+    fn finish_capture_readers(&self, WriterTag(tag): &mut Self::WriterTag, (): Self::FastCapture) -> Self::Capture {
         Capture {
-            raw: self.raw.capture_readers(tag),
+            raw: self.raw.finish_capture_readers(tag, ()),
             backoff: Backoff::new(),
         }
     }
 
     #[inline]
-    fn is_capture_complete(&self, capture: &mut Self::Capture) -> bool {
+    fn readers_have_exited(&self, capture: &mut Self::Capture) -> bool {
         #[cold]
         fn cold(strategy: &ParkStrategy, backoff: &Backoff) {
             if backoff.is_completed() {
@@ -86,7 +94,7 @@ unsafe impl Strategy for ParkStrategy {
             }
         }
 
-        let is_completed = self.raw.is_capture_complete(&mut capture.raw);
+        let is_completed = self.raw.readers_have_exited(&mut capture.raw);
 
         if !is_completed {
             cold(self, &capture.backoff)
