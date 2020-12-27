@@ -1,4 +1,4 @@
-use crate::{raw, BufferRef};
+use crate::{raw, BufferRef, Strategy};
 
 use std::vec::Vec;
 
@@ -15,7 +15,16 @@ pub struct WriterRef<'a, O> {
     ops: &'a mut Vec<O>,
 }
 
-impl<B: BufferRef, O> From<crate::raw::Writer<B>> for Writer<B, O> {
+pub trait LeftRightStrategy: crate::Seal {}
+impl crate::Seal for crate::sync::SyncStrategy {}
+impl crate::Seal for crate::sync::park::ParkStrategy {}
+impl LeftRightStrategy for crate::sync::SyncStrategy {}
+impl LeftRightStrategy for crate::sync::park::ParkStrategy {}
+
+impl<B: BufferRef, O> From<crate::raw::Writer<B>> for Writer<B, O>
+where
+    B::Strategy: LeftRightStrategy,
+{
     #[inline]
     fn from(mut writer: crate::raw::Writer<B>) -> Self {
         let swap = unsafe { crate::raw::Writer::start_buffer_swap(&mut writer) };
@@ -49,8 +58,6 @@ impl<B: BufferRef, O: Operation<B::Buffer>> Writer<B, O> {
     pub fn apply_all<I: IntoIterator<Item = O>>(&mut self, ops: I) { self.ops.extend(ops); }
 
     pub fn flush(&mut self) {
-        use crate::Strategy;
-
         let strategy = crate::raw::Writer::strategy(&self.writer);
         while !strategy.is_swap_completed(&mut self.swap) {}
 
@@ -94,14 +101,13 @@ impl crate::op::Operation<Counter> for i64 {
 fn left_right() {
     use crate::raw::BufferDataBuilder;
 
-    let mut buffer_data = BufferDataBuilder {
-        strategy: crate::local::LocalStrategy::default(),
+    let mut buffer_data: crate::sync::BufferData<_, _> = BufferDataBuilder {
+        strategy: crate::sync::SyncStrategy::default(),
         buffers: [Counter(0), Counter(0)],
         extra: (),
     }
     .build();
     let (mut reader, writer) = buffer_data.split_mut();
-    let writer = crate::local::reference::Writer::from(writer);
     let mut writer = Writer::from(writer);
 
     writer.apply(10);
