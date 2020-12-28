@@ -237,10 +237,10 @@ impl<B: BufferRef> Writer<B> {
         }
     }
 
-    pub fn swap_buffers_with<F: FnMut(Split<B>)>(this: &mut Self, mut f: F) {
+    pub fn swap_buffers_with<F: FnMut(&Self)>(this: &mut Self, mut f: F) {
         let swap = unsafe { Self::start_buffer_swap(this) };
-        let split = Self::split(this);
-        let f = move || f(split);
+        let this: &Self = this;
+        let f = move || f(this);
         Self::finish_swap_with(this, swap, f);
     }
 

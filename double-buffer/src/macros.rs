@@ -61,7 +61,8 @@ macro_rules! __imp_newtype_impl_inner {
                 $crate::raw::Writer::split_mut(&mut this.0)
             }
             pub fn swap_buffers(this: &mut Self) { $crate::raw::Writer::swap_buffers(&mut this.0) }
-            pub fn swap_buffers_with<F: FnMut($crate::raw::Split<'_, BufferRef<$($buf_data, )? B, E>>)>(this: &mut Self, f: F) {
+            pub fn swap_buffers_with<F: FnMut(&Self)>(this: &mut Self, mut f: F) {
+                let f = move |writer: &_| f(unsafe { &*(writer as *const _ as *const Self) });
                 $crate::raw::Writer::swap_buffers_with(&mut this.0, f)
             }
             pub unsafe fn swap_buffers_unchecked(this: &mut Self) {
