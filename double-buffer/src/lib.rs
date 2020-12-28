@@ -39,7 +39,7 @@ pub unsafe trait TrustedRadium: Radium + Seal {
     #[doc(hidden)]
     const IS_LOCAL: bool;
     #[doc(hidden)]
-    unsafe fn load_unchecked(&self) -> Self::Item;
+    unsafe fn load_unsync(&self) -> Self::Item;
 }
 
 impl Seal for core::cell::Cell<bool> {}
@@ -47,7 +47,7 @@ unsafe impl TrustedRadium for core::cell::Cell<bool> {
     #[doc(hidden)]
     const IS_LOCAL: bool = true;
     #[doc(hidden)]
-    unsafe fn load_unchecked(&self) -> Self::Item { self.get() }
+    unsafe fn load_unsync(&self) -> Self::Item { self.get() }
 }
 
 impl Seal for core::sync::atomic::AtomicBool {}
@@ -55,7 +55,7 @@ unsafe impl TrustedRadium for core::sync::atomic::AtomicBool {
     #[doc(hidden)]
     const IS_LOCAL: bool = false;
     #[doc(hidden)]
-    unsafe fn load_unchecked(&self) -> Self::Item {
+    unsafe fn load_unsync(&self) -> Self::Item {
         core::ptr::read(self as *const core::sync::atomic::AtomicBool as *const bool)
     }
 }
@@ -65,7 +65,7 @@ unsafe impl TrustedRadium for core::cell::Cell<usize> {
     #[doc(hidden)]
     const IS_LOCAL: bool = true;
     #[doc(hidden)]
-    unsafe fn load_unchecked(&self) -> Self::Item { self.get() }
+    unsafe fn load_unsync(&self) -> Self::Item { self.get() }
 }
 
 impl Seal for core::sync::atomic::AtomicUsize {}
@@ -73,7 +73,7 @@ unsafe impl TrustedRadium for core::sync::atomic::AtomicUsize {
     #[doc(hidden)]
     const IS_LOCAL: bool = false;
     #[doc(hidden)]
-    unsafe fn load_unchecked(&self) -> Self::Item {
+    unsafe fn load_unsync(&self) -> Self::Item {
         core::ptr::read(self as *const core::sync::atomic::AtomicUsize as *const usize)
     }
 }

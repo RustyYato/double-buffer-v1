@@ -186,7 +186,7 @@ impl<B: BufferRef> Writer<B> {
     pub fn read(this: &Self) -> &B::Buffer {
         unsafe {
             let inner = &*this.inner;
-            let which = inner.which.load_unchecked();
+            let which = inner.which.load_unsync();
             let read_buffer = inner.buffers.read_buffer(which);
             &*read_buffer
         }
@@ -202,7 +202,7 @@ impl<B: BufferRef> Writer<B> {
     pub fn split(this: &Self) -> Split<'_, B> {
         unsafe {
             let inner = &*this.inner;
-            let which = inner.which.load_unchecked();
+            let which = inner.which.load_unsync();
             let reader = inner.buffers.read_buffer(which);
             let writer = inner.buffers.write_buffer(which);
 
@@ -218,7 +218,7 @@ impl<B: BufferRef> Writer<B> {
     pub fn split_mut(this: &mut Self) -> SplitMut<'_, B> {
         unsafe {
             let inner = &*this.inner;
-            let which = inner.which.load_unchecked();
+            let which = inner.which.load_unsync();
             let reader = inner.buffers.read_buffer(which);
             let writer = inner.buffers.write_buffer(which);
 
@@ -403,7 +403,7 @@ impl<B: BufferRef> Deref for Writer<B> {
     fn deref(&self) -> &Self::Target {
         unsafe {
             let inner = &*self.inner;
-            let which = inner.which.load_unchecked();
+            let which = inner.which.load_unsync();
             let write = inner.buffers.write_buffer(which);
             &*write
         }
@@ -415,7 +415,7 @@ impl<B: BufferRef> DerefMut for Writer<B> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe {
             let inner = &*self.inner;
-            let which = inner.which.load_unchecked();
+            let which = inner.which.load_unsync();
             let write = inner.buffers.write_buffer(which);
             &mut *write
         }
