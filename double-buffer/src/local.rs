@@ -4,28 +4,8 @@ use crate::Strategy;
 
 pub type BufferData<B, E = ()> = crate::BufferData<core::cell::Cell<bool>, LocalStrategy, B, E>;
 
-#[cfg(feature = "alloc")]
-pub mod owned {
-    pub type BufferRef<B, E = ()> = std::rc::Rc<super::BufferData<B, E>>;
-    pub type Writer<B, E = ()> = crate::raw::Writer<BufferRef<B, E>>;
-    pub type Reader<B, E = ()> = crate::raw::Reader<BufferRef<B, E>>;
-    pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::raw::ReaderGuard<'reader, BufferRef<B, E>, T>;
-}
-
-#[cfg(feature = "alloc")]
-pub mod thin {
-    pub type BufferRef<B, E = ()> = std::boxed::Box<crate::thin::RcInner<super::BufferData<B, E>>>;
-    pub type Writer<B, E = ()> = crate::raw::Writer<BufferRef<B, E>>;
-    pub type Reader<B, E = ()> = crate::raw::Reader<BufferRef<B, E>>;
-    pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::raw::ReaderGuard<'reader, BufferRef<B, E>, T>;
-}
-
-pub mod reference {
-    pub type BufferRef<'buf_data, B, E = ()> = &'buf_data mut super::BufferData<B, E>;
-    pub type Writer<'buf_data, B, E = ()> = crate::raw::Writer<BufferRef<'buf_data, B, E>>;
-    pub type Reader<'buf_data, B, E = ()> = crate::raw::Reader<BufferRef<'buf_data, B, E>>;
-    pub type ReaderGuard<'reader, 'buf_data, B, T = B, E = ()> =
-        crate::raw::ReaderGuard<'reader, BufferRef<'buf_data, B, E>, T>;
+crate::__imp_make_newtype! {
+    crate::local::LocalStrategy, crate::local::CaptureError, RcInner, std::rc::Rc
 }
 
 #[derive(Default)]

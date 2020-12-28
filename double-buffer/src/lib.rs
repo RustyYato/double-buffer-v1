@@ -3,6 +3,9 @@
 #[cfg(all(feature = "alloc", not(feature = "std")))]
 extern crate alloc as std;
 
+#[doc(hidden)]
+mod macros;
+
 #[cfg(feature = "alloc")]
 pub mod op;
 

@@ -12,26 +12,8 @@ pub mod park;
 
 pub type BufferData<B, E = ()> = crate::BufferData<AtomicBool, SyncStrategy, B, E>;
 
-pub mod owned {
-    pub type BufferRef<B, E = ()> = std::sync::Arc<super::BufferData<B, E>>;
-    pub type Writer<B, E = ()> = crate::raw::Writer<BufferRef<B, E>>;
-    pub type Reader<B, E = ()> = crate::raw::Reader<BufferRef<B, E>>;
-    pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::raw::ReaderGuard<'reader, BufferRef<B, E>, T>;
-}
-
-pub mod thin {
-    pub type BufferRef<B, E = ()> = std::boxed::Box<crate::thin::ArcInner<super::BufferData<B, E>>>;
-    pub type Writer<B, E = ()> = crate::raw::Writer<BufferRef<B, E>>;
-    pub type Reader<B, E = ()> = crate::raw::Reader<BufferRef<B, E>>;
-    pub type ReaderGuard<'reader, B, T = B, E = ()> = crate::raw::ReaderGuard<'reader, BufferRef<B, E>, T>;
-}
-
-pub mod reference {
-    pub type BufferRef<'buf_data, B, E = ()> = &'buf_data mut super::BufferData<B, E>;
-    pub type Writer<'buf_data, B, E = ()> = crate::raw::Writer<BufferRef<'buf_data, B, E>>;
-    pub type Reader<'buf_data, B, E = ()> = crate::raw::Reader<BufferRef<'buf_data, B, E>>;
-    pub type ReaderGuard<'reader, 'buf_data, B, T = B, E = ()> =
-        crate::raw::ReaderGuard<'reader, BufferRef<'buf_data, B, E>, T>;
+crate::__imp_make_newtype! {
+    crate::sync::SyncStrategy, core::convert::Infallible, ArcInner, std::sync::Arc
 }
 
 #[derive(Default)]

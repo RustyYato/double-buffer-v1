@@ -67,8 +67,8 @@ impl<M> Clone for Read<M> {
 pub type WriteMap<'env, M> = Write<'env, M, <M as RawMap>::Key, <M as RawMap>::Value>;
 pub fn new<'env, M: RawMap>() -> (Read<M>, WriteMap<'env, M>) {
     let (a, b) = M::new();
-    let (r, w) = db::new(Arc::new(db::BufferData::new(a, b)));
-    let w = db::op::Writer::from(w);
+    let (r, w) = db::sync::park::owned::new(Arc::new(db::BufferData::new(a, b)));
+    let w = db::op::Writer::from(w.0);
 
     (Read { map: r }, Write { map: w })
 }
